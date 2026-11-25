@@ -10,8 +10,8 @@ Generate an image with the Codex CLI: $ARGUMENTS
 1. Resolve the script. It is `scripts/codex-image` inside this skill's folder. Use the first of these
    that exists, checking in order — the placeholders are only filled in in some contexts:
    - `${CLAUDE_SKILL_DIR}/scripts/codex-image`
-   - `${CLAUDE_PLUGIN_ROOT}/skills/codex-bridge/scripts/codex-image`
-   - otherwise Glob for `**/skills/codex-bridge/scripts/codex-image` under `~/.claude` and take the
+   - `${CLAUDE_PLUGIN_ROOT}/skills/imagebridge/scripts/codex-image`
+   - otherwise Glob for `**/skills/imagebridge/scripts/codex-image` under `~/.claude` and take the
      newest match.
    Always invoke it as `bash "<resolved path>"` — the executable bit does not survive every install
    method. Quote the path.
@@ -29,7 +29,7 @@ Generate an image with the Codex CLI: $ARGUMENTS
 4. It prints the saved file's absolute path on stdout, one per line. Afterwards:
    - Read the file to confirm it is really an image and really what was asked for.
    - Check its actual pixel size — the model chooses the dimensions and will not obey a size request
-     on this path. If the user needs exact dimensions, say so and point at `/codex-bridge:openai-image`.
+     on this path. If the user needs exact dimensions, say so and point at `/imagebridge:exact`.
    - Show it to the user with `SendUserFile`.
 
 If it fails, re-run once with `-v` to get the Codex transcript, then report what actually went wrong.

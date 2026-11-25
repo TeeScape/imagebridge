@@ -1,17 +1,17 @@
 ---
-description: Check that the Codex Bridge prerequisites are installed and signed in
+description: Check that the ImageBridge prerequisites are installed and signed in
 allowed-tools: Bash(command:*), Bash(codex:*), Bash(openai:*), Bash(bash:*), Bash(ls:*)
 ---
 
-# Codex Bridge — environment check
+# ImageBridge — environment check
 
 Codex CLI: !`command -v codex >/dev/null 2>&1 && codex --version || echo "NOT INSTALLED"`
 
-OpenAI CLI: !`command -v openai >/dev/null 2>&1 && openai --version || echo "not installed (only needed for /codex-bridge:openai-image)"`
+OpenAI CLI: !`command -v openai >/dev/null 2>&1 && openai --version || echo "not installed (only needed for /imagebridge:exact)"`
 
 Codex auth: !`command -v codex >/dev/null 2>&1 && codex login status 2>&1 | head -1 || echo "n/a"`
 
-Bundled scripts: !`ls -1 "${CLAUDE_PLUGIN_ROOT}/skills/codex-bridge/scripts" 2>/dev/null || echo "COULD NOT RESOLVE \${CLAUDE_PLUGIN_ROOT}"`
+Bundled scripts: !`ls -1 "${CLAUDE_PLUGIN_ROOT}/skills/imagebridge/scripts" 2>/dev/null || echo "COULD NOT RESOLVE \${CLAUDE_PLUGIN_ROOT}"`
 
 OPENAI_API_KEY: !`[ -n "$OPENAI_API_KEY" ] && echo "set" || echo "not set (fine — only openai-image needs it)"`
 

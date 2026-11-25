@@ -9,8 +9,8 @@ Delegate this to Codex: $ARGUMENTS
 
 1. Resolve `scripts/codex-ask` the same way as the image command: try
    `${CLAUDE_SKILL_DIR}/scripts/codex-ask`, then
-   `${CLAUDE_PLUGIN_ROOT}/skills/codex-bridge/scripts/codex-ask`, then Glob for
-   `**/skills/codex-bridge/scripts/codex-ask` under `~/.claude`. Invoke it as `bash "<path>"`.
+   `${CLAUDE_PLUGIN_ROOT}/skills/imagebridge/scripts/codex-ask`, then Glob for
+   `**/skills/imagebridge/scripts/codex-ask` under `~/.claude`. Invoke it as `bash "<path>"`.
 
 2. Choose the flags deliberately:
    - **Default to read-only.** Codex may read and run commands but not edit files.

@@ -1,4 +1,4 @@
-# Codex Bridge
+# ImageBridge
 
 **A Claude Code plugin that lets Claude hand work to the OpenAI Codex CLI and get the result back.**
 
@@ -18,10 +18,10 @@ Claude: [runs codex-image] → assets/folder.png
 
 | | runs on | needs a key | use for |
 |---|---|---|---|
-| `/codex-bridge:image` | Codex `$imagegen` (gpt-image-2 class) | **no** | icons, illustrations, mockups, placeholder art |
-| `/codex-bridge:ask` | `codex exec` | **no** | second opinion on a diff, delegated coding tasks, reading screenshots |
-| `/codex-bridge:openai-image` | `openai images generate` | yes | images needing an exact size, quality or count |
-| `/codex-bridge:doctor` | — | — | check your setup |
+| `/imagebridge:draw` | Codex `$imagegen` (gpt-image-2 class) | **no** | icons, illustrations, mockups, placeholder art |
+| `/imagebridge:ask` | `codex exec` | **no** | second opinion on a diff, delegated coding tasks, reading screenshots |
+| `/imagebridge:exact` | `openai images generate` | yes | images needing an exact size, quality or count |
+| `/imagebridge:doctor` | — | — | check your setup |
 
 Plus a **skill** that fires on its own: say *"make me an icon for this"* or *"ask Codex what it thinks
 of this diff"* and Claude reaches for the right one without you typing a command.
@@ -44,17 +44,17 @@ spends that plan's quota.
 In Claude Code:
 
 ```
-/plugin marketplace add TeeScape/codex-bridge
+/plugin marketplace add TeeScape/imagebridge
 ```
 
 ```
-/plugin install codex-bridge@codex-bridge
+/plugin install imagebridge@imagebridge
 ```
 
 Then check it:
 
 ```
-/codex-bridge:doctor
+/imagebridge:doctor
 ```
 
 <details>
@@ -74,9 +74,9 @@ Let the skill pick it up:
 Or drive it directly:
 
 ```
-/codex-bridge:image a tiny orange robot watering a houseplant -o out/robot.png
-/codex-bridge:ask review the staged diff for off-by-one errors
-/codex-bridge:openai-image a blue folder icon --size 1024x1024 --background transparent
+/imagebridge:draw a tiny orange robot watering a houseplant -o out/robot.png
+/imagebridge:ask review the staged diff for off-by-one errors
+/imagebridge:exact a blue folder icon --size 1024x1024 --background transparent
 ```
 
 The scripts also stand alone:

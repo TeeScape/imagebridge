@@ -1,9 +1,9 @@
 ---
-name: codex-bridge
+name: imagebridge
 description: Delegate work to the OpenAI Codex CLI from Claude Code. Use this to GENERATE IMAGES (icons, illustrations, mockups, textures, og-images, placeholder art, logos, hero images) since Claude cannot create raster images itself; to get a second opinion from a GPT model on code, a diff or a design; to run a self-contained coding task on the ChatGPT plan instead of spending Claude tokens; or to describe and compare existing images. Triggers on "generate an image", "make an icon", "create a picture", "draw me", "ask codex", "second opinion", "what would GPT say", "สร้างภาพ", "ทำไอคอน", "วาดรูป", "ถาม codex", "ให้ gpt ดู", "ให้ codex ทำ".
 ---
 
-# Codex Bridge
+# ImageBridge
 
 Hands work to the OpenAI Codex CLI and brings the result back. Three bundled scripts, all
 non-interactive: they print their result on **stdout** and exit non-zero on failure.
@@ -14,18 +14,18 @@ They live in `scripts/` inside this skill's own folder. Resolve the path with th
 that exists — the placeholders are only expanded in some contexts, so check in order:
 
 1. `${CLAUDE_SKILL_DIR}/scripts/<name>`
-2. `${CLAUDE_PLUGIN_ROOT}/skills/codex-bridge/scripts/<name>`
-3. Glob for `**/skills/codex-bridge/scripts/<name>` under `~/.claude` and take the newest match.
+2. `${CLAUDE_PLUGIN_ROOT}/skills/imagebridge/scripts/<name>`
+3. Glob for `**/skills/imagebridge/scripts/<name>` under `~/.claude` and take the newest match.
 
 **Always invoke as `bash "<resolved path>"`** — the executable bit does not survive every install
 method — and quote the path. Below, `SCRIPTS` means the resolved directory.
 
 If none of the three resolves, the plugin files are not where expected: tell the user to reinstall
-`codex-bridge` from `/plugin` and stop. Do not reimplement the scripts yourself.
+`imagebridge` from `/plugin` and stop. Do not reimplement the scripts yourself.
 
 ## Prerequisites
 
-`codex` must be installed and signed in. `/codex-bridge:doctor` checks this. If it is missing:
+`codex` must be installed and signed in. `/imagebridge:doctor` checks this. If it is missing:
 `brew install --cask codex` or `npm install -g @openai/codex`, then **the user** runs `codex login`.
 Never try to authenticate on their behalf.
 
