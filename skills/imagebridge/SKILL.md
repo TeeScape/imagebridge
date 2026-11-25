@@ -5,8 +5,24 @@ description: Delegate work to the OpenAI Codex CLI from Claude Code. Use this to
 
 # ImageBridge
 
-Hands work to the OpenAI Codex CLI and brings the result back. Three bundled scripts, all
-non-interactive: they print their result on **stdout** and exit non-zero on failure.
+Hands work to the OpenAI Codex CLI and brings the result back.
+
+## Use the MCP tools when they are there
+
+This plugin ships an MCP server. If this session has the tools `generate_image`, `ask_codex`
+and `check_setup` (their names will carry an `imagebridge` prefix), **use them instead of the
+shell**: same capability, typed arguments, no quoting traps. Everything below describes the
+fallback path, for when the MCP server is not running — the server needs `python3` on PATH,
+and the plugin still works fully without it.
+
+| MCP tool | script it wraps |
+|---|---|
+| `generate_image` | `codex-image` |
+| `ask_codex` | `codex-ask` |
+| `check_setup` | — |
+
+A long call is normal: `generate_image` takes 45-60 s. If the client gives up before the tool
+returns, the user can raise `MCP_TOOL_TIMEOUT` (milliseconds) in their environment.
 
 ## Finding the scripts
 

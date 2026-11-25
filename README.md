@@ -38,6 +38,25 @@ Claude: [runs codex-image] → assets/folder.png
 Plus a **skill** that fires on its own: say *"make me an icon for this"* or *"ask Codex what it thinks
 of this diff"* and Claude reaches for the right one without you typing a command.
 
+### MCP tools
+
+The plugin also ships an **MCP server**, so Claude gets real typed tools instead of shelling out:
+
+| tool | does |
+|---|---|
+| `generate_image` | prompt, optional `output_path` / `output_dir` / `reference_images` → returns the saved path |
+| `ask_codex` | prompt, optional `cwd` / `allow_writes` / `images` / `stdin_text` → returns Codex's answer |
+| `check_setup` | reports what is installed, signed in and missing |
+
+It is **one Python file with no dependencies** — stdlib only, nothing to `pip install`. It needs
+`python3` on your PATH; without it the MCP tools simply don't appear and everything else still works.
+
+`generate_image` runs for 45–60 s. If your client gives up first, raise its MCP tool timeout:
+
+```bash
+export MCP_TOOL_TIMEOUT=600000   # milliseconds
+```
+
 ## Requirements
 
 - [Claude Code](https://claude.com/claude-code)
@@ -137,6 +156,16 @@ environments that are already isolated.
 The plugin never handles your credentials. `codex login` is yours to run, and `openai-image` refuses
 to go hunting for an API key — it reads `OPENAI_API_KEY` from the environment or from a `.env` you
 place next to the plugin, and otherwise just tells you it is unset.
+
+## Repo layout
+
+```
+.claude-plugin/     plugin.json + marketplace.json (this repo is its own marketplace)
+commands/           the four slash commands
+skills/imagebridge/ SKILL.md and the three bash scripts it drives
+mcp/                the zero-dependency MCP server
+assets/             logo, icon, social preview
+```
 
 ## License
 

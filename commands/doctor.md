@@ -13,7 +13,11 @@ Codex auth: !`command -v codex >/dev/null 2>&1 && codex login status 2>&1 | head
 
 Bundled scripts: !`ls -1 "${CLAUDE_PLUGIN_ROOT}/skills/imagebridge/scripts" 2>/dev/null || echo "COULD NOT RESOLVE \${CLAUDE_PLUGIN_ROOT}"`
 
-OPENAI_API_KEY: !`[ -n "$OPENAI_API_KEY" ] && echo "set" || echo "not set (fine — only openai-image needs it)"`
+OPENAI_API_KEY: !`[ -n "$OPENAI_API_KEY" ] && echo "set" || echo "not set (fine — only the exact-size path needs it)"`
+
+python3 (for the MCP server): !`command -v python3 >/dev/null 2>&1 && python3 --version || echo "NOT FOUND — the MCP tools will not start; the scripts still work"`
+
+MCP server self-test: !`printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | python3 "${CLAUDE_PLUGIN_ROOT}/mcp/imagebridge-server.py" 2>/dev/null | head -c 200 || echo "could not run"`
 
 Read the results above and tell the user, in their language, in a few lines:
 
@@ -26,5 +30,7 @@ Read the results above and tell the user, in their language, in a few lines:
   reinstall with `/plugin`.
 - Mention the `openai` CLI and `OPENAI_API_KEY` only if they are missing **and** the user wants exact
   image dimensions; otherwise do not raise it.
+- If the MCP self-test printed a JSON line listing tools, the MCP server works. If `python3` is
+  missing, say the MCP tools are unavailable but the plugin still works through its commands.
 
 Do not dump the raw output again — summarise it.
