@@ -157,6 +157,26 @@ The plugin never handles your credentials. `codex login` is yours to run, and `o
 to go hunting for an API key — it reads `OPENAI_API_KEY` from the environment or from a `.env` you
 place next to the plugin, and otherwise just tells you it is unset.
 
+## Design decisions
+
+**No plugin-root `bin/`.** Claude Code can put a plugin's `bin/` directory on the Bash tool's
+PATH, which would let the skill call `codex-image` as a bare command instead of
+`bash "<resolved path>"`. This plugin deliberately does not use it:
+
+- It would only simplify the *last* fallback. The primary path is the MCP tools, and the slash
+  commands already resolve scripts through `${CLAUDE_PLUGIN_ROOT}`. Both work today.
+- It would put three generically-named executables — `codex-ask`, `codex-image`, `openai-image` —
+  on the PATH of every shell command in every session where the plugin is enabled. That is a
+  surprising side effect for an image plugin, and an easy way to collide with something else.
+- The plugin reference states that claude.ai and Cowork will not install a plugin containing this
+  directory. *(Taken from the docs; not independently reproduced here.)*
+- Of the 60 installed plugins checked locally — Anthropic's own marketplace included — none ships
+  a plugin-root `bin/`. Anthropic's examples put scripts in `bin/` but still invoke them by
+  explicit `${CLAUDE_PLUGIN_ROOT}/bin/...` path, never as bare commands.
+
+If you want the commands on your PATH anyway, `./install.sh` symlinks them into `~/bin`, which
+keeps that choice with the user instead of baking it into the plugin.
+
 ## Repo layout
 
 ```
