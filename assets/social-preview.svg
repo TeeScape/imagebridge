@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <rect width="1280" height="640" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="1280" height="10" fill="#2563EB"/>
+  <g transform="translate(150,236) scale(2.6)">
+    <rect width="64" height="64" rx="14" fill="#2563EB"/>
+    <circle cx="45" cy="20" r="4.5" fill="#F97316"/>
+    <path d="M16 47 V36 a11 11 0 0 1 22 0 v11" fill="none" stroke="#FFFFFF" stroke-width="5.5" stroke-linecap="round"/>
+  </g>
+  <text x="360" y="296" font-family="Helvetica, Arial, sans-serif" font-size="88" font-weight="bold" fill="#111827">ImageBridge</text>
+  <text x="362" y="356" font-family="Helvetica, Arial, sans-serif" font-size="34" fill="#4B5563">Claude Code can&#8217;t draw. This plugin lets it.</text>
+  <text x="362" y="414" font-family="Helvetica, Arial, sans-serif" font-size="29" fill="#2563EB">Images via the OpenAI Codex CLI &#183; runs on your ChatGPT plan</text>
+</svg>

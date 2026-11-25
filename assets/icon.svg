@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="ImageBridge">
+  <title>ImageBridge</title>
+  <rect width="64" height="64" rx="14" fill="#2563EB"/>
+  <circle cx="45" cy="20" r="4.5" fill="#F97316"/>
+  <path d="M16 47 V36 a11 11 0 0 1 22 0 v11" fill="none" stroke="#FFFFFF" stroke-width="5.5" stroke-linecap="round"/>
+</svg>
