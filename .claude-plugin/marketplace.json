@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "codex-bridge",
+  "description": "Codex Bridge: generate images and delegate work from Claude Code to the OpenAI Codex CLI.",
+  "owner": {
+    "name": "Teerapol Kittikanjanaruk",
+    "url": "https://github.com/TeeScape"
+  },
+  "plugins": [
+    {
+      "name": "codex-bridge",
+      "source": "./",
+      "description": "Let Claude Code hand work to the OpenAI Codex CLI and get the result back — above all image generation, which Claude cannot do itself. Runs on your signed-in ChatGPT plan, no API key required.",
+      "version": "0.1.0",
+      "author": { "name": "Teerapol Kittikanjanaruk", "url": "https://github.com/TeeScape" },
+      "homepage": "https://github.com/TeeScape/codex-bridge",
+      "category": "development",
+      "keywords": ["openai", "codex", "image-generation", "gpt-image", "second-opinion"]
+    }
+  ]
+}

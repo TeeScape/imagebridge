@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# openai-image — thin wrapper over `openai images generate` (the official Go CLI).
+#
+# Unlike codex-image this bills the OpenAI *API* per image, so it needs
+# OPENAI_API_KEY. The key is read from the environment, or from the .env file
+# next to this repo (override with OPENAI_CLI_ENV=/path/to/.env).
+#
+# Use this instead of codex-image when you need exact control over
+# size / quality / count / background, or many images in one call.
+
+set -uo pipefail
+
+# Resolve through ~/bin symlinks so .env is found next to the real repo.
+SRC="${BASH_SOURCE[0]}"
+while [ -L "$SRC" ]; do
+  LDIR=$(cd -P "$(dirname "$SRC")" && pwd)
+  SRC=$(readlink "$SRC")
+  case "$SRC" in /*) ;; *) SRC="$LDIR/$SRC" ;; esac
+done
+SELF=$(cd -P "$(dirname "$SRC")/.." && pwd)
+ENVFILE="${OPENAI_CLI_ENV:-$SELF/.env}"
+
+if [ -z "${OPENAI_API_KEY:-}" ] && [ -f "$ENVFILE" ]; then
+  set -a; . "$ENVFILE"; set +a
+fi
+
+if [ -z "${OPENAI_API_KEY:-}" ]; then
+  cat >&2 <<MSG
+openai-image: OPENAI_API_KEY is not set.
+  export it, or write it into $ENVFILE :
+      OPENAI_API_KEY=sk-...
+  No key? Use codex-image instead — it runs on the ChatGPT plan.
+MSG
+  exit 1
+fi
+
+command -v openai >/dev/null 2>&1 || {
+  echo "openai-image: 'openai' not found. Install: brew install openai/tools/openai" >&2; exit 127; }
+
+if [ $# -eq 0 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  cat <<'USAGE'
+openai-image "<prompt>" [--name FILE] [--output-dir DIR] [--size WxH]
+             [--quality auto|low|medium|high|xhigh|max] [-n N]
+             [--model gpt-image-2.6-sunburst|gpt-image-2|...]
+             [--background transparent|opaque|auto] [--format json]
+
+  Saves to ~/Downloads/gpt-images/ unless --output-dir is given (must exist).
+  A bare first argument is passed as --prompt.
+
+Example
+  openai-image "flat vector icon of a blue folder" --name folder \
+    --output-dir ./assets --size 1024x1024 --background transparent
+USAGE
+  exit 0
+fi
+
+# allow a bare prompt as the first argument
+if [ "${1#-}" = "$1" ]; then
+  PROMPT="$1"; shift
+  exec openai images generate --prompt "$PROMPT" "$@"
+fi
+exec openai images generate "$@"

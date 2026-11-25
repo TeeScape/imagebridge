@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# codex-image — generate an image with the Codex CLI's built-in $imagegen skill
+# and print the absolute path of the saved file on stdout.
+#
+#   IMG=$(codex-image "a tiny orange robot watering a houseplant" -o out/robot.png)
+#
+# Runs on the signed-in ChatGPT plan (no OPENAI_API_KEY). Codex always writes
+# its generations to $CODEX_HOME/generated_images/<session>/; this script picks
+# the files produced by *this* run from there and places them itself, so the
+# output path never depends on the model following instructions.
+
+set -uo pipefail
+
+usage() {
+  cat <<'USAGE'
+codex-image [options] "<image description>"
+
+Options
+  -o, --out FILE        exact output path (parent dir is created)
+  -d, --dir DIR         output directory; filename derived from the description
+                        (default: current directory)
+  -r, --ref FILE        reference image to guide the result (repeatable)
+  -m, --model MODEL     Codex model driving the generation
+  -a, --all             keep every image this run produced, not just the newest
+      --user-config     load ~/.codex/config.toml (off by default)
+  -v, --verbose         print the Codex transcript to stderr
+  -h, --help            this help
+
+stdout: one absolute path per line. Exit non-zero if nothing was generated.
+
+Examples
+  codex-image "flat vector icon of a blue folder, white background" -o assets/folder.png
+  codex-image "the same robot, now at night" -r out/robot.png -d out
+USAGE
+}
+
+OUT=""; DIR=""; MODEL=""; USER_CONFIG=0; VERBOSE=0; ALL=0; REFS=()
+
+POSITIONAL=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o|--out)      OUT="${2:?--out needs a value}"; shift 2 ;;
+    -d|--dir)      DIR="${2:?--dir needs a value}"; shift 2 ;;
+    -r|--ref)      REFS+=("${2:?--ref needs a value}"); shift 2 ;;
+    -m|--model)    MODEL="${2:?--model needs a value}"; shift 2 ;;
+    -a|--all)      ALL=1; shift ;;
+    --user-config) USER_CONFIG=1; shift ;;
+    -v|--verbose)  VERBOSE=1; shift ;;
+    -h|--help)     usage; exit 0 ;;
+    --)            shift; while [ $# -gt 0 ]; do POSITIONAL+=("$1"); shift; done ;;
+    -*)            echo "codex-image: unknown option: $1" >&2; exit 2 ;;
+    *)             POSITIONAL+=("$1"); shift ;;
+  esac
+done
+set -- ${POSITIONAL+"${POSITIONAL[@]}"}
+
+DESC="${1:-}"
+if [ -z "$DESC" ]; then usage >&2; exit 2; fi
+if [ $# -gt 1 ]; then
+  echo "codex-image: got $# separate arguments; quote the whole text as one argument." >&2
+  exit 2
+fi
+
+command -v codex >/dev/null 2>&1 || {
+  echo "codex-image: 'codex' not found. Install: brew install --cask codex" >&2; exit 127; }
+
+GEN_ROOT="${CODEX_HOME:-$HOME/.codex}/generated_images"
+
+# Where the finished file(s) should end up.
+if [ -n "$OUT" ]; then
+  mkdir -p "$(dirname "$OUT")" || exit 1
+  DEST_DIR=$(cd "$(dirname "$OUT")" && pwd)
+  DEST_NAME=$(basename "$OUT")
+  FIXED_NAME=1
+else
+  DIR="${DIR:-.}"
+  mkdir -p "$DIR" || exit 1
+  DEST_DIR=$(cd "$DIR" && pwd)
+  # slug from the first words of the description
+  DEST_NAME=$(printf '%s' "$DESC" | tr '[:upper:]' '[:lower:]' \
+    | sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-//' -e 's/-$//' | cut -c1-48)
+  [ -z "$DEST_NAME" ] && DEST_NAME="codex-image"
+  DEST_NAME="$DEST_NAME.png"
+  FIXED_NAME=0
+fi
+
+SCRATCH=$(mktemp -d -t codex-image) || exit 1
+LOG="$SCRATCH/transcript.log"
+STAMP="$SCRATCH/stamp"
+: >"$LOG"; : >"$STAMP"
+trap 'rm -rf "$SCRATCH"' EXIT
+
+# The agent only has to generate; placement is this script's job. It gets a
+# throwaway workspace so a stray file never lands in the caller's project.
+PROMPT="\$imagegen $DESC
+
+Generate the image. Do not ask questions, do not write any other files, do not
+copy or move the result. When the image exists, reply with only its absolute path."
+
+ARGS=(exec --skip-git-repo-check --sandbox workspace-write -C "$SCRATCH")
+[ "$USER_CONFIG" -eq 1 ] || ARGS+=(--ignore-user-config)
+[ -n "$MODEL" ] && ARGS+=(-m "$MODEL")
+# `-i/--image` is variadic: it keeps eating arguments until the next flag, so the
+# reference list must come last and be terminated by `--` or it eats the prompt.
+for f in ${REFS+"${REFS[@]}"}; do
+  [ -f "$f" ] || { echo "codex-image: reference image not found: $f" >&2; exit 1; }
+  ARGS+=(-i "$f")
+done
+ARGS+=(-- "$PROMPT")
+
+codex "${ARGS[@]}" </dev/null >"$LOG" 2>&1
+RC=$?
+[ "$VERBOSE" -eq 1 ] && cat "$LOG" >&2
+
+# Collect what this run generated, newest first.
+FOUND="$SCRATCH/found"
+: >"$FOUND"
+if [ -d "$GEN_ROOT" ]; then
+  find "$GEN_ROOT" -type f -newer "$STAMP" \
+    \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) \
+    -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null >"$FOUND"
+fi
+
+if [ ! -s "$FOUND" ]; then
+  echo "codex-image: no image was generated (codex exit $RC)." >&2
+  echo "--- codex transcript ---" >&2
+  cat "$LOG" >&2
+  exit 1
+fi
+
+[ "$ALL" -eq 1 ] || { head -n 1 "$FOUND" >"$FOUND.one"; mv "$FOUND.one" "$FOUND"; }
+
+i=0
+while IFS= read -r src; do
+  [ -n "$src" ] || continue
+  ext="${src##*.}"
+  if [ "$FIXED_NAME" -eq 1 ]; then base="${DEST_NAME%.*}"; dext="${DEST_NAME##*.}"
+  else                            base="${DEST_NAME%.*}"; dext="$ext"; fi
+  i=$((i+1))
+  cand="$DEST_DIR/$base.$dext"
+  [ "$i" -gt 1 ] && cand="$DEST_DIR/$base-$i.$dext"
+  n=2
+  while [ -e "$cand" ]; do cand="$DEST_DIR/$base-$n.$dext"; n=$((n+1)); done
+  cp "$src" "$cand" || exit 1
+  printf '%s\n' "$cand"
+done <"$FOUND"

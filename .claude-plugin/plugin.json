@@ -1,0 +1,23 @@
+{
+  "name": "codex-bridge",
+  "version": "0.1.0",
+  "displayName": "Codex Bridge",
+  "description": "Let Claude Code hand work to the OpenAI Codex CLI and get the result back — above all image generation, which Claude cannot do itself. Generates icons, illustrations and mockups on your signed-in ChatGPT plan with no API key, asks a GPT model for a second opinion on a diff, and delegates self-contained coding tasks off the Claude budget.",
+  "author": {
+    "name": "Teerapol Kittikanjanaruk",
+    "url": "https://github.com/TeeScape"
+  },
+  "homepage": "https://github.com/TeeScape/codex-bridge",
+  "repository": "https://github.com/TeeScape/codex-bridge",
+  "license": "MIT",
+  "keywords": [
+    "openai",
+    "codex",
+    "image-generation",
+    "gpt-image",
+    "cli",
+    "delegation",
+    "second-opinion",
+    "multi-model"
+  ]
+}

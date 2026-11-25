@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# codex-ask — delegate a task to the OpenAI Codex CLI and print its final answer.
+#
+# stdout = Codex's final message only (progress goes to stderr), so callers can
+# capture it directly:  ANSWER=$(codex-ask "...")
+#
+# By default ~/.codex/config.toml is NOT loaded (--ignore-user-config), because
+# that file can point Codex at a local provider (e.g. Ollama) or an unrelated
+# model. Pass --user-config to honour it. Auth is always taken from $CODEX_HOME.
+
+set -uo pipefail
+
+usage() {
+  cat <<'USAGE'
+codex-ask [options] "<prompt>"
+       ... | codex-ask --stdin [options] "<prompt>"   # pipe extra context in
+
+Options
+  -w, --write           allow Codex to edit files (sandbox: workspace-write)
+      --yolo            no sandbox at all (sandbox: danger-full-access)
+  -C, --cd DIR          working root for the agent
+      --add-dir DIR     extra writable directory (repeatable)
+  -m, --model MODEL     model override (e.g. gpt-6.2-sol)
+  -i, --image FILE      attach an image to the prompt (repeatable)
+      --schema FILE     JSON Schema for a structured final answer
+      --json            emit raw JSONL events instead of the final message
+      --resume          continue the most recent Codex session
+      --stdin           forward piped stdin to Codex as extra context
+      --user-config     load ~/.codex/config.toml (off by default)
+      --search          enable live web search
+  -h, --help            this help
+
+Examples
+  codex-ask "explain what src/auth.ts does" -C ~/Claude/myapp
+  codex-ask -w -C ~/Claude/myapp "add a --verbose flag to cli.py and run the tests"
+  codex-ask --schema schema.json "extract the deps from package.json" -C .
+  git diff | codex-ask --stdin "review this diff for bugs"
+USAGE
+}
+
+SANDBOX=read-only
+MODEL=""; CWD=""; SCHEMA=""
+JSON=0; RESUME=0; USER_CONFIG=0; SEARCH=0; USE_STDIN=0
+IMAGES=(); ADD_DIRS=()
+
+POSITIONAL=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -w|--write)     SANDBOX=workspace-write; shift ;;
+    --yolo)         SANDBOX=danger-full-access; shift ;;
+    -m|--model)     MODEL="${2:?--model needs a value}"; shift 2 ;;
+    -C|--cd)        CWD="${2:?--cd needs a value}"; shift 2 ;;
+    --add-dir)      ADD_DIRS+=("${2:?--add-dir needs a value}"); shift 2 ;;
+    -i|--image)     IMAGES+=("${2:?--image needs a value}"); shift 2 ;;
+    --schema)       SCHEMA="${2:?--schema needs a value}"; shift 2 ;;
+    --json)         JSON=1; shift ;;
+    --resume)       RESUME=1; shift ;;
+    --stdin)        USE_STDIN=1; shift ;;
+    --user-config)  USER_CONFIG=1; shift ;;
+    --search)       SEARCH=1; shift ;;
+    -h|--help)      usage; exit 0 ;;
+    --)             shift; while [ $# -gt 0 ]; do POSITIONAL+=("$1"); shift; done ;;
+    -*)             echo "codex-ask: unknown option: $1" >&2; exit 2 ;;
+    *)              POSITIONAL+=("$1"); shift ;;
+  esac
+done
+set -- ${POSITIONAL+"${POSITIONAL[@]}"}
+
+PROMPT="${1:-}"
+if [ -z "$PROMPT" ]; then usage >&2; exit 2; fi
+if [ $# -gt 1 ]; then
+  echo "codex-ask: got $# separate arguments; quote the whole text as one argument." >&2
+  exit 2
+fi
+
+command -v codex >/dev/null 2>&1 || {
+  echo "codex-ask: 'codex' not found. Install: brew install --cask codex" >&2; exit 127; }
+
+ARGS=(exec --skip-git-repo-check --sandbox "$SANDBOX")
+[ "$USER_CONFIG" -eq 1 ] || ARGS+=(--ignore-user-config)
+[ -n "$MODEL" ]  && ARGS+=(-m "$MODEL")
+[ -n "$CWD" ]    && ARGS+=(-C "$CWD")
+[ -n "$SCHEMA" ] && ARGS+=(--output-schema "$SCHEMA")
+[ "$SEARCH" -eq 1 ] && ARGS+=(--search)
+[ "$JSON" -eq 1 ]   && ARGS+=(--json)
+for d in ${ADD_DIRS+"${ADD_DIRS[@]}"}; do ARGS+=(--add-dir "$d"); done
+[ "$RESUME" -eq 1 ] && ARGS+=(resume --last)
+# `-i/--image` is variadic: it keeps eating arguments until the next flag, so the
+# image list must come last and be terminated by `--` or it swallows the prompt.
+for f in ${IMAGES+"${IMAGES[@]}"}; do ARGS+=(-i "$f"); done
+ARGS+=(-- "$PROMPT")
+
+# Codex reads stdin when it is not a terminal and blocks until EOF. Callers such
+# as Claude Code hand us an open pipe that never closes, so stdin is detached
+# unless --stdin was asked for explicitly.
+if [ "$USE_STDIN" -eq 1 ]; then exec codex "${ARGS[@]}"
+else                            exec codex "${ARGS[@]}" </dev/null
+fi
