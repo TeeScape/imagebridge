@@ -45,7 +45,7 @@ esac
 # case where a success-looking path used to be returned for a failed run.
 sess="$CODEX_HOME/generated_images/stub-$$"
 mkdir -p "$sess"
-python3 - "$sess/exec-stub.${STUB_EXT:-png}" 4 4 0 <<'PY'
+python3 - "$sess/exec-stub.${STUB_EXT:-png}" 64 64 0 <<'PY'
 import sys, struct, zlib
 path = sys.argv[1]
 w = int(sys.argv[2]); h = int(sys.argv[3]); alpha = sys.argv[4] == '1'
@@ -221,6 +221,44 @@ out=$(bash "$SCRIPTS/codex-image" "x" --from-last 9 --dry-run 2>&1); rc=$?
 [ "$rc" -ne 0 ] && ok "--from-last outside 1-5 is refused" || bad "--from-last outside 1-5 is refused"
 
 echo
+echo "imagelib (stdlib PNG decode / resize / encode)"
+make_png "$WORK/big.png"   64 64 0
+make_png "$WORK/biga.png"  64 64 1
+printf 'not a png' > "$WORK/bad.png"
+il() { python3 -c "
+import sys; sys.path.insert(0, '$ROOT/mcp')
+import imagelib as L
+$1" 2>&1; }
+
+r=$(il "w,h,c,px = L.read_png('$WORK/big.png'); print(w,h,c,len(px))")
+is "reads an RGB png"            "$r" "64 64 3 12288"
+r=$(il "w,h,c,px = L.read_png('$WORK/biga.png'); print(w,h,c,len(px))")
+is "reads an RGBA png"           "$r" "64 64 4 16384"
+r=$(il "print(L.fit(1254,1254,384), L.fit(1536,1024,384), L.fit(100,80,384))")
+is "fit keeps aspect, never enlarges" "$r" "(384, 384) (384, 256) (100, 80)"
+r=$(il "b,w,h = L.preview_base64('$WORK/big.png', 32); print(w,h,b[:8])")
+has "preview downsamples"        "$r" "32 32 iVBORw0K"
+r=$(il "
+import base64, io
+b,w,h = L.preview_base64('$WORK/biga.png', 32)
+raw = base64.b64decode(b)
+w2,h2,c2,_ = L.read_png_bytes(raw) if hasattr(L,'read_png_bytes') else (0,0,0,0)
+print('roundtrip-ok' if raw[:8] == L.MAGIC else 'bad-magic')")
+has "preview is a real png"      "$r" "roundtrip-ok"
+r=$(il "
+try:
+    L.read_png('$WORK/bad.png'); print('no-error')
+except L.Unsupported as e: print('Unsupported:', e)")
+has "a non-png raises Unsupported" "$r" "Unsupported: not a PNG"
+r=$(il "
+L.resize_file('$WORK/big.png', 16)
+w,h,_,_ = L.read_png('$WORK/big.png'); print(w,h)")
+is "resize_file shrinks in place" "$r" "16 16"
+r=$(il "
+o = L.resize_file('$WORK/biga.png', 999); print(o[0]==o[2] and o[1]==o[3])")
+is "resize_file never enlarges"   "$r" "True"
+
+echo
 echo "openai-edit (stubbed; no paid call, no key)"
 make_openai_stub
 make_png "$WORK/src.png"      64 64 0
@@ -291,6 +329,18 @@ jhas "a mask on the free path is refused clearly" "$r" "d['result'].get('isError
 r=$(OPENAI_API_KEY=test-key rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"edit_image\",\"arguments\":{\"provider\":\"api\",\"prompt\":\"make it blue\",\"images\":[\"$WORK/src.png\"],\"mask\":\"$WORK/mask-ok.png\",\"output_path\":\"$WORK/mcp-edited.png\"}}}" | tail -1)
 jhas "provider=api still reaches the paid path" "$r" "d['result']['structuredContent']['provider']=='api'"
 jhas "the paid path says it is billed"          "$r" "'BILLED' in d['result']['content'][0]['text']"
+
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"generate_image\",\"arguments\":{\"prompt\":\"x\",\"output_path\":\"$WORK/prev.png\",\"return_image\":true}}}" | tail -1)
+jhas "return_image adds an image block" "$r" "any(c['type']=='image' for c in d['result']['content'])"
+jhas "the image block is a png"          "$r" "[c for c in d['result']['content'] if c['type']=='image'][0]['mimeType']=='image/png'"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"generate_image\",\"arguments\":{\"prompt\":\"x\",\"output_path\":\"$WORK/small.png\",\"max_dimension\":16}}}" | tail -1)
+jhas "max_dimension reports the resize"  "$r" "'resized' in d['result']['content'][0]['text']"
+sz=$(python3 -c "
+import sys; sys.path.insert(0,'$ROOT/mcp'); import imagelib as L
+w,h,_,_ = L.read_png('$WORK/small.png'); print(w,h)" 2>/dev/null)
+is "max_dimension really shrank the file" "$sz" "16 16"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"tools/call\",\"params\":{\"name\":\"generate_image\",\"arguments\":{\"prompt\":\"x\",\"output_path\":\"$WORK/plain.png\"}}}" | tail -1)
+jhas "no preview unless asked"           "$r" "not any(c['type']=='image' for c in d['result']['content'])"
 
 r=$(rpc "$INIT" '{"jsonrpc":"2.0","method":"notifications/initialized"}' '{"jsonrpc":"2.0","id":8,"method":"ping"}')
 is "a notification gets no reply" "$(printf '%s' "$r" | grep -c '"id"')" "2"

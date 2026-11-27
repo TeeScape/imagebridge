@@ -74,7 +74,12 @@ IMG=$(bash "$SCRIPTS/codex-image" "flat vector icon of a blue folder" -o assets/
   five real arguments, so it does not need the API key path. `--gif` likewise asks for animation.
 - The script places the file itself, reading Codex's own `~/.codex/generated_images/<session>/`,
   so the path it prints is reliable — the model is never trusted with placement.
-- Afterwards: read the file to confirm it is what was asked for, then show it with `SendUserFile`.
+- Pass `return_image: true` to get a 384 px preview back as an image, so you can judge the result
+  yourself in the same call instead of generating, then reading the file separately. Judge
+  composition and colour from it, not fine detail.
+- `max_dimension: 512` shrinks the saved file after generation. The generated size is still the
+  model's choice; this is how you honour "make it 512px" without the paid path.
+- Afterwards: show it with `SendUserFile` so the user sees it too.
 
 ## Ask Codex to do something
 

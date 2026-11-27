@@ -45,7 +45,7 @@ The plugin also ships an **MCP server**, so Claude gets real typed tools instead
 
 | tool | does |
 |---|---|
-| `generate_image` | prompt, optional `output_path` / `output_dir` / `reference_images` / `transparent` → returns the saved path |
+| `generate_image` | prompt, optional `output_path` / `output_dir` / `reference_images` / `transparent` / `return_image` / `max_dimension` → returns the saved path |
 | `edit_image` | prompt, `images[]`, optional `from_last`; `provider` defaults to the **free** Codex path → returns the edited path |
 | `ask_codex` | prompt, optional `cwd` / `allow_writes` / `images` / `stdin_text` → returns Codex's answer |
 | `check_setup` | reports what is installed, signed in and missing |
@@ -185,6 +185,28 @@ PATH, which would let the skill call `codex-image` as a bare command instead of
 If you want the commands on your PATH anyway, `./install.sh` symlinks them into `~/bin`, which
 keeps that choice with the user instead of baking it into the plugin.
 
+## Seeing the result, and sizing it
+
+`return_image: true` returns a 384 px preview as an inline image, so the model can look at what
+it just made instead of being told a path and taking it on faith. `max_dimension: 512` shrinks
+the saved file afterwards — the generated size is still the model's choice, but the file you keep
+is the size you asked for.
+
+```
+Generated 1 image:
+  assets/apple.png  (512x512, 183737 bytes)
+- resized apple.png from 1254x1254 to 512x512
+- preview of apple.png shown at 384x384
+```
+
+Both work with **no dependencies**. `mcp/imagelib.py` decodes, resamples and re-encodes PNG with
+nothing but `zlib` and `struct`; the bilinear resampler is a port of the one in the
+[analogue](https://teerapol-k.com/) photo editor, which is plain arithmetic with no imaging
+library behind it. Scope is deliberate — 8-bit, non-interlaced, colour types 0/2/4/6, which is
+what the image models emit. Anything else skips the preview instead of failing the generation.
+
+A preview costs about 3 seconds on a 1.2 MP image, against the 45–60 the generation itself takes.
+
 ## Editing is free
 
 Codex edits images on your ChatGPT plan. Its own tool documentation says so — *"For edits, use
@@ -233,7 +255,7 @@ openai-edit: the mask must have the same dimensions as the image.
 ./tests/run.sh
 ```
 
-59 checks against a **stub codex** and a **stub `openai` CLI**, so the suite costs nothing, needs no network and no ChatGPT
+74 checks against a **stub codex** and a **stub `openai` CLI**, so the suite costs nothing, needs no network and no ChatGPT
 quota. Every check exists because a real bug got past its absence: a failed generation reported as
 a success, `-o` quietly forking into `-2`, `-3`, a Thai description collapsing to a generic
 filename, a JSON-RPC array killing the server.

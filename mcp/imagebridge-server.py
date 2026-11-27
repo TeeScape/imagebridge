@@ -22,7 +22,7 @@ import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.5.0"
+SERVER_VERSION = "0.6.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -30,6 +30,12 @@ SUPPORTED_PROTOCOLS = ["2025-06-18"]
 LATEST_PROTOCOL = SUPPORTED_PROTOCOLS[0]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+try:
+    import imagelib           # stdlib-only PNG decode / resize / encode
+except Exception as _exc:     # a preview is a nicety; never let it break a generation
+    imagelib = None
+    _IMAGELIB_ERROR = str(_exc)
 PLUGIN_ROOT = os.path.dirname(HERE)
 SCRIPT_DIR = os.path.join(PLUGIN_ROOT, "skills", "imagebridge", "scripts")
 
@@ -157,6 +163,14 @@ TOOLS = [
                     "type": "boolean",
                     "description": "Ask for a transparent background. Real parameter of the image tool, but the model chooses it, so it is a strong request rather than a guarantee - check the result.",
                 },
+                "return_image": {
+                    "type": "boolean",
+                    "description": "Also return a small inline preview so you can SEE the result without a separate file read. Downscaled to 384px, so judge composition and colour from it, not fine detail. Default false.",
+                },
+                "max_dimension": {
+                    "type": "integer",
+                    "description": "Shrink the saved image so its longest side is at most this many pixels. The model still chooses the generated size; this resizes afterwards, and never enlarges.",
+                },
                 "timeout_seconds": {
                     "type": "integer",
                     "description": "Give up after this long. Default 300.",
@@ -239,6 +253,14 @@ TOOLS = [
                 "quality": {"type": "string", "description": "low | medium | high | xhigh | max | auto"},
                 "background": {"type": "string", "description": "transparent | opaque | auto"},
                 "model": {"type": "string", "description": "Image model; defaults to the CLI's own default."},
+                "return_image": {
+                    "type": "boolean",
+                    "description": "Also return a small inline preview so you can SEE the result without a separate file read. Downscaled to 384px, so judge composition and colour from it, not fine detail. Default false.",
+                },
+                "max_dimension": {
+                    "type": "integer",
+                    "description": "Shrink the saved image so its longest side is at most this many pixels. The model still chooses the generated size; this resizes afterwards, and never enlarges.",
+                },
                 "timeout_seconds": {"type": "integer", "description": "Give up after this long. Default 300."},
             },
             "required": ["prompt", "images"],
@@ -258,12 +280,65 @@ TOOLS = [
 ]
 
 
+PREVIEW_SIDE = 384
+
+
+def _describe(path):
+    """'1254x1254, 1.2 MB' for a saved file, without assuming it is a PNG."""
+    size = png_size(path)
+    return "%s, %d bytes" % (("%dx%d" % size) if size else "size unknown",
+                             os.path.getsize(path))
+
+
+def _apply_max_dimension(paths, max_dimension):
+    """Shrink saved images in place. Returns notes to show the caller."""
+    notes = []
+    if not max_dimension:
+        return notes
+    if imagelib is None:
+        notes.append("max_dimension was ignored: imagelib is unavailable (%s)" % _IMAGELIB_ERROR)
+        return notes
+    for path in paths:
+        try:
+            ow, oh, nw, nh = imagelib.resize_file(path, int(max_dimension))
+            if (ow, oh) != (nw, nh):
+                notes.append("resized %s from %dx%d to %dx%d"
+                             % (os.path.basename(path), ow, oh, nw, nh))
+            else:
+                notes.append("%s was already within %dpx"
+                             % (os.path.basename(path), max_dimension))
+        except Exception as exc:
+            notes.append("could not resize %s: %s" % (os.path.basename(path), exc))
+    return notes
+
+
+def _image_blocks(paths, want_image):
+    """An inline preview per image, when asked for and possible."""
+    blocks, notes = [], []
+    if not want_image:
+        return blocks, notes
+    if imagelib is None:
+        return blocks, ["return_image was ignored: imagelib is unavailable (%s)" % _IMAGELIB_ERROR]
+    for path in paths:
+        try:
+            data, w, h = imagelib.preview_base64(path, PREVIEW_SIDE)
+            blocks.append({"type": "image", "data": data, "mimeType": "image/png"})
+            notes.append("preview of %s shown at %dx%d" % (os.path.basename(path), w, h))
+        except Exception as exc:
+            notes.append("no preview for %s: %s" % (os.path.basename(path), exc))
+    return blocks, notes
+
+
 def tool_generate_image(args):
     prompt = args.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt is required and must be a non-empty string")
 
-    cli = [prompt]
+    # Flags first, then `--`, then the prompt. Putting `--` at the front turns
+    # every later flag into a positional and the script rejects the call: that
+    # is how generate_image was broken through MCP from 0.3.0 to 0.5.0, with no
+    # test covering a SUCCESSFUL generate to catch it.
+    cli = []
     if args.get("output_path"):
         cli += ["-o", str(args["output_path"])]
     elif args.get("output_dir"):
@@ -276,7 +351,7 @@ def tool_generate_image(args):
         cli.append("-a")
     if args.get("transparent"):
         cli.append("-t")
-    cli.insert(0, "--")   # everything after this is the prompt, never a flag
+    cli += ["--", prompt]
 
     timeout = int(args.get("timeout_seconds") or IMAGE_TIMEOUT_DEFAULT)
     proc = run_script("codex-image", cli, timeout)
@@ -294,11 +369,13 @@ def tool_generate_image(args):
             "no image was produced (exit %s).\n%s" % (proc.returncode, detail[-1500:])
         )
 
+    notes = _apply_max_dimension(paths, args.get("max_dimension"))
+    previews, pnotes = _image_blocks(paths, args.get("return_image"))
+    notes += pnotes
+
     lines, blocks = [], []
     for path in paths:
-        size = png_size(path)
-        dims = "%dx%d" % size if size else "unknown size"
-        lines.append("%s  (%s, %d bytes)" % (path, dims, os.path.getsize(path)))
+        lines.append("%s  (%s)" % (path, _describe(path)))
         blocks.append(
             {
                 "type": "resource_link",
@@ -310,12 +387,13 @@ def tool_generate_image(args):
         )
 
     header = "Generated %d image%s:" % (len(paths), "" if len(paths) == 1 else "s")
-    note = (
-        "\n\nThe model chose these dimensions; they cannot be requested on this path. "
-        "Read the file to check the result before reporting it as done."
-    )
+    note = ("\n\nThe model chose the generated dimensions; they cannot be requested on this "
+            "path. Check the result before reporting it as done.")
+    if notes:
+        note += "\n" + "\n".join("- " + n for n in notes)
     return {
-        "content": [{"type": "text", "text": header + "\n" + "\n".join(lines) + note}] + blocks,
+        "content": [{"type": "text", "text": header + "\n" + "\n".join(lines) + note}]
+                   + previews + blocks,
         "structuredContent": {"paths": paths},
     }
 
@@ -407,19 +485,23 @@ def tool_edit_image(args):
         if not paths:
             raise RuntimeError("no edited image was produced.\n%s"
                                % (proc.stdout or proc.stderr or "")[-1500:])
+        notes = _apply_max_dimension(paths, args.get("max_dimension"))
+        previews, pnotes = _image_blocks(paths, args.get("return_image"))
+        notes += pnotes
         lines, blocks = [], []
         for path in paths:
-            size = png_size(path)
-            lines.append("%s  (%s, %d bytes)" % (
-                path, ("%dx%d" % size) if size else "size unknown", os.path.getsize(path)))
+            lines.append("%s  (%s)" % (path, _describe(path)))
             blocks.append({"type": "resource_link", "uri": "file://" + path,
                            "name": os.path.basename(path), "description": "Edited image",
                            "mimeType": MIME_BY_EXT.get(os.path.splitext(path)[1].lower(),
                                                        "application/octet-stream")})
+        tail = ("\n\nThe original is untouched. Check the result before reporting it done.")
+        if notes:
+            tail += "\n" + "\n".join("- " + n for n in notes)
         return {"content": [{"type": "text", "text":
-                "Edited %d image%s on the ChatGPT plan (no API charge):\n%s\n\n"
-                "The original is untouched. Check the result before reporting it done."
-                % (len(paths), "" if len(paths) == 1 else "s", "\n".join(lines))}] + blocks,
+                "Edited %d image%s on the ChatGPT plan (no API charge):\n%s%s"
+                % (len(paths), "" if len(paths) == 1 else "s", "\n".join(lines), tail)}]
+                + previews + blocks,
                 "structuredContent": {"paths": paths, "provider": "codex"}}
 
     # ---- the paid path: only for a mask or an exact size -------------------
@@ -453,18 +535,23 @@ def tool_edit_image(args):
         raise RuntimeError("openai-edit produced no file.\n%s"
                            % (proc.stdout or proc.stderr or "")[-1500:])
 
+    notes = _apply_max_dimension(paths, args.get("max_dimension"))
+    previews, pnotes = _image_blocks(paths, args.get("return_image"))
+    notes += pnotes
     lines, blocks = [], []
     for path in paths:
-        size = png_size(path)
-        lines.append("%s  (%s, %d bytes)" % (
-            path, ("%dx%d" % size) if size else "size unknown", os.path.getsize(path)))
+        lines.append("%s  (%s)" % (path, _describe(path)))
         blocks.append({"type": "resource_link", "uri": "file://" + path,
                        "name": os.path.basename(path), "description": "Edited image",
                        "mimeType": MIME_BY_EXT.get(os.path.splitext(path)[1].lower(),
                                                    "application/octet-stream")})
+    tail = "\n\nThe original was kept."
+    if notes:
+        tail += "\n" + "\n".join("- " + n for n in notes)
     return {"content": [{"type": "text", "text":
-            "Edited %d image%s — BILLED TO THE OPENAI API:\n%s\n\nThe original was kept."
-            % (len(paths), "" if len(paths) == 1 else "s", "\n".join(lines))}] + blocks,
+            "Edited %d image%s — BILLED TO THE OPENAI API:\n%s%s"
+            % (len(paths), "" if len(paths) == 1 else "s", "\n".join(lines), tail)}]
+            + previews + blocks,
             "structuredContent": {"paths": paths, "provider": "api"}}
 
 
