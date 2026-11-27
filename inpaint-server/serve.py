@@ -41,11 +41,17 @@ MAX_BODY = 8 * 1024 * 1024
 
 
 def build(model_path):
-    import numpy as np
-    import onnxruntime as ort
-
+    # The file first, the imports second. Checking in the other order answers
+    # a mistyped path with an ImportError, which is true but useless, and the
+    # missing package deserves a sentence of its own rather than a traceback.
     if not os.path.isfile(model_path):
-        sys.exit("model not found: %s\nSee README.md for where to get lama-512-h.onnx." % model_path)
+        sys.exit("model not found: %s\nSee README.md for which LaMa ONNX exports fit." % model_path)
+    try:
+        import numpy as np
+        import onnxruntime as ort
+    except ImportError as exc:
+        sys.exit("%s\nInstall this server's dependencies first: "
+                 "pip install -r requirements.txt" % exc)
     session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
 
     # Check the model is the shape this server speaks, and say so plainly if it

@@ -355,6 +355,13 @@ has "it refuses to start with no model"  "$r" "give --model"
 has "and exits non-zero"                 "$r" "rc=1"
 r=$(cd "$ROOT/inpaint-server" && python3 serve.py --model /nope/missing.onnx 2>&1)
 has "a missing model file is named"      "$r" "model not found"
+# A machine without the dependencies installed should get a sentence, not a
+# traceback - deterministic here via a stub that raises on import.
+STUB=$(mktemp -d "${TMPDIR:-/tmp}/ib-stub.XXXXXX")
+printf 'raise ImportError("No module named %s")\n' "'onnxruntime'" > "$STUB/onnxruntime.py"
+r=$(cd "$ROOT/inpaint-server" && PYTHONPATH="$STUB" python3 serve.py --model "$STUB/onnxruntime.py" 2>&1)
+has "a missing dependency says what to run" "$r" "pip install -r requirements.txt"
+rm -rf "$STUB"
 
 echo
 echo "inspect_image (measurement only; no model, no network)"
