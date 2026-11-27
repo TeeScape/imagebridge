@@ -106,19 +106,24 @@ bash "$SCRIPTS/codex-ask" --resume "now fix what you found"
 Codex does not share this conversation. Write it a self-contained brief; it starts cold in the
 directory you give it. Relay its answer rather than pasting it whole, and say it came from Codex.
 
-## Editing an existing image
+## Editing an existing image — free
 
 ```bash
-bash "$SCRIPTS/openai-edit" "make the sky purple" -i photo.png -o out/purple.png
-bash "$SCRIPTS/openai-edit" "replace the logo" -i a.png -m mask.png -o out/b.png
+bash "$SCRIPTS/codex-image" "change the folder to green, nothing else" -r folder.png -o folder.png
+bash "$SCRIPTS/codex-image" "make the sky purple" -r photo.png -o out/purple.png
+bash "$SCRIPTS/codex-image" "remove the logo" --from-last 1 -d out
 ```
 
-Needs `OPENAI_API_KEY` and bills per call. **The mask's fully transparent areas are the parts
-that get edited**, and it must be a PNG with alpha and the same dimensions as the image — the
-script checks that locally and refuses for free, so relay its reason instead of guessing.
+This runs on the ChatGPT plan with **no API key and no per-image charge**, and it is a real edit:
+editing a 1254×1254 icon returned 1254×1254 with a silhouette IoU of 1.000 and only the colour
+changed. Say what to change *and what to keep* — the model is editing, not redrawing.
 
-Before reaching for this, consider `codex-image "..." -r original.png`: a free variation on the
-ChatGPT plan. Only a surgical change to part of an image needs the paid edit path.
+`-r` takes up to 16 images; `--from-last N` (1–5) edits recent conversation images that have no
+file on disk. The two cannot be combined.
+
+**Only two things need the paid API path**: an exact output size (`openai-image`) and a pixel
+mask (`openai-edit`). Transparency, references and GIFs are all free. Never send the user to the
+paid path without saying it costs money and why the free one cannot do it.
 
 ## Exact image dimensions
 

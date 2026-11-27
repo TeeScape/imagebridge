@@ -18,6 +18,8 @@ bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; [ -n "${2:-
 is()   { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected [$3] got [$2]"; fi; }
 # paths: $TMPDIR often ends in / so the expected value can carry a double slash
 samepath() { a=$(printf '%s' "$2" | tr -s /); b=$(printf '%s' "$3" | tr -s /); is "$1" "$a" "$b"; }
+# "contains", with both sides path-normalised
+haspath() { a=$(printf '%s' "$2" | tr -s /); b=$(printf '%s' "$3" | tr -s /); has "$1" "$a" "$b"; }
 # JSON: assert on the parsed value, never on spacing
 jhas() { # name, json, python-expression over `d`
   if printf '%s' "$2" | python3 -c "import json,sys
@@ -193,6 +195,20 @@ has   "-o without an extension gets the real one" "$out" "noext.png"
 out=$(STUB_MODE=ok bash "$SCRIPTS/codex-image" "ไอคอนโฟลเดอร์สีฟ้า แบน" -d "$WORK" 2>/dev/null)
 hasnt "a Thai description keeps its words" "$out" "codex-image.png"
 
+# editing on the free path: the reference must reach referenced_image_paths via
+# the prompt, not `codex exec -i`, which is a different mechanism
+make_png "$WORK/src.png" 64 64 0
+out=$(bash "$SCRIPTS/codex-image" "make it green" -r "$WORK/src.png" --dry-run 2>&1)
+has   "an edit names the file for referenced_image_paths" "$out" "referenced_image_paths"
+haspath "an edit passes the absolute path"                "$out" "$WORK/src.png"
+hasnt "an edit does not attach with -i"                   "$out" " -i "
+out=$(bash "$SCRIPTS/codex-image" "x" --from-last 3 --dry-run 2>&1)
+has   "--from-last drives num_last_images_to_include"     "$out" "num_last_images_to_include"
+out=$(bash "$SCRIPTS/codex-image" "x" -r "$WORK/src.png" --from-last 2 --dry-run 2>&1); rc=$?
+[ "$rc" -ne 0 ] && ok "--ref and --from-last together are refused" || bad "--ref and --from-last together are refused"
+out=$(bash "$SCRIPTS/codex-image" "x" --from-last 9 --dry-run 2>&1); rc=$?
+[ "$rc" -ne 0 ] && ok "--from-last outside 1-5 is refused" || bad "--from-last outside 1-5 is refused"
+
 echo
 echo "openai-edit (stubbed; no paid call, no key)"
 make_openai_stub
@@ -250,8 +266,20 @@ r=$(rpc "$INIT" '{"jsonrpc":"2.0","id":7,"method":"tools/list"}' | tail -1)
 jhas "tools/list now offers edit_image" "$r" "'edit_image' in [t['name'] for t in d['result']['tools']]"
 r=$(rpc "$INIT" '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"edit_image","arguments":{"prompt":"x"}}}' | tail -1)
 jhas "edit_image without images is isError" "$r" "d['result'].get('isError') is True"
-r=$(OPENAI_API_KEY=test-key rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"edit_image\",\"arguments\":{\"prompt\":\"make it blue\",\"images\":[\"$WORK/src.png\"],\"mask\":\"$WORK/mask-ok.png\",\"output_path\":\"$WORK/mcp-edited.png\"}}}" | tail -1)
-jhas "edit_image returns a path through MCP" "$r" "d['result']['structuredContent']['paths']"
+# the default provider is the free Codex path
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"edit_image\",\"arguments\":{\"prompt\":\"make it green\",\"images\":[\"$WORK/src.png\"],\"output_path\":\"$WORK/mcp-edit-free.png\"}}}" | tail -1)
+jhas "edit_image defaults to the free Codex path" "$r" "d['result']['structuredContent']['provider']=='codex'"
+jhas "the free edit returns a path"              "$r" "len(d['result']['structuredContent']['paths'])==1"
+jhas "the free edit says there is no API charge" "$r" "'no API charge' in d['result']['content'][0]['text']"
+
+# a mask is a paid-path feature, and asking for it free must explain, not fail silently
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"edit_image\",\"arguments\":{\"prompt\":\"x\",\"images\":[\"$WORK/src.png\"],\"mask\":\"$WORK/mask-ok.png\"}}}" | tail -1)
+jhas "a mask on the free path is refused clearly" "$r" "d['result'].get('isError') is True and 'bills per call' in d['result']['content'][0]['text']"
+
+# the paid path still works when asked for explicitly
+r=$(OPENAI_API_KEY=test-key rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"edit_image\",\"arguments\":{\"provider\":\"api\",\"prompt\":\"make it blue\",\"images\":[\"$WORK/src.png\"],\"mask\":\"$WORK/mask-ok.png\",\"output_path\":\"$WORK/mcp-edited.png\"}}}" | tail -1)
+jhas "provider=api still reaches the paid path" "$r" "d['result']['structuredContent']['provider']=='api'"
+jhas "the paid path says it is billed"          "$r" "'BILLED' in d['result']['content'][0]['text']"
 
 r=$(rpc "$INIT" '{"jsonrpc":"2.0","method":"notifications/initialized"}' '{"jsonrpc":"2.0","id":8,"method":"ping"}')
 is "a notification gets no reply" "$(printf '%s' "$r" | grep -c '"id"')" "2"

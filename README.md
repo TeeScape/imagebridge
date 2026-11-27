@@ -33,7 +33,7 @@ Claude: [runs codex-image] → assets/folder.png
 | `/imagebridge:draw` | Codex `$imagegen` (gpt-image-2 class) | **no** | icons, illustrations, mockups, placeholder art |
 | `/imagebridge:ask` | `codex exec` | **no** | second opinion on a diff, delegated coding tasks, reading screenshots |
 | `/imagebridge:exact` | `openai images generate` | yes | images needing an exact size, quality or count |
-| `/imagebridge:edit` | `openai images edit` | yes | changing part of an image and keeping the rest |
+| `/imagebridge:edit` | Codex `$imagegen` + `referenced_image_paths` | **no** | changing part of an image and keeping the rest |
 | `/imagebridge:doctor` | — | — | check your setup |
 
 Plus a **skill** that fires on its own: say *"make me an icon for this"* or *"ask Codex what it thinks
@@ -46,7 +46,7 @@ The plugin also ships an **MCP server**, so Claude gets real typed tools instead
 | tool | does |
 |---|---|
 | `generate_image` | prompt, optional `output_path` / `output_dir` / `reference_images` / `transparent` → returns the saved path |
-| `edit_image` | prompt, `images[]`, optional `mask` / `size` / `quality` / `background` → returns the edited path |
+| `edit_image` | prompt, `images[]`, optional `from_last`; `provider` defaults to the **free** Codex path → returns the edited path |
 | `ask_codex` | prompt, optional `cwd` / `allow_writes` / `images` / `stdin_text` → returns Codex's answer |
 | `check_setup` | reports what is installed, signed in and missing |
 
@@ -185,16 +185,41 @@ PATH, which would let the skill call `codex-image` as a bare command instead of
 If you want the commands on your PATH anyway, `./install.sh` symlinks them into `~/bin`, which
 keeps that choice with the user instead of baking it into the plugin.
 
-## Editing, and the mask rule that catches everyone
+## Editing is free
 
-`edit_image` changes part of an image and leaves the rest alone. A `--mask` confines the edit, and
-the rule is the opposite of most people's instinct:
+Codex edits images on your ChatGPT plan. Its own tool documentation says so — *"For edits, use
+`referenced_image_paths` when every target image has a local file path"* — and `codex-image -r`
+drives exactly that:
 
-> the **fully transparent** areas of the mask are the areas that get **edited**
+```bash
+codex-image "change the folder to green, nothing else" -r assets/folder.png -o assets/folder.png
+```
 
-The mask must also be a PNG with an alpha channel and exactly the same dimensions as the image.
-Get any of that wrong and the API still bills you for a request that changed nothing, so
-`openai-edit` checks all of it locally and refuses before sending anything:
+Measured, not assumed. Editing a 1254×1254 icon from blue to orange:
+
+| | source | result |
+|---|---|---|
+| dimensions | 1254×1254 | 1254×1254 |
+| silhouette overlap (IoU) | — | **1.000** |
+| average ink colour | `(1, 100, 243)` | `(245, 120, 19)` |
+
+The shape is preserved pixel for pixel; only the colour changed. `--from-last N` edits the last
+N images of the Codex conversation when they have no file on disk.
+
+### The two things the free path genuinely cannot do
+
+| | why | where |
+|---|---|---|
+| an exact output size | Codex's image tool has no size argument | `/imagebridge:exact` |
+| a pixel mask | no mask argument either | `edit_image` with `provider: "api"` |
+
+Both bill the OpenAI API per call and need `OPENAI_API_KEY`. Everything else — editing,
+transparency, references, GIFs — is free.
+
+On the paid path the mask rule is the opposite of most people's instinct: the **fully
+transparent** areas are the ones that get **edited**, and the mask must be a PNG with an alpha
+channel and exactly the image's dimensions. `openai-edit` checks all of that locally and refuses
+before spending anything:
 
 ```
 openai-edit: the mask must have the same dimensions as the image.
@@ -202,16 +227,13 @@ openai-edit: the mask must have the same dimensions as the image.
              mask  mask.png: 96x96
 ```
 
-Editing needs `OPENAI_API_KEY`. If you only want a variation rather than a surgical edit,
-`codex-image "..." -r original.png` is free and usually the better first try.
-
 ## Tests
 
 ```bash
 ./tests/run.sh
 ```
 
-48 checks against a **stub codex** and a **stub `openai` CLI**, so the suite costs nothing, needs no network and no ChatGPT
+59 checks against a **stub codex** and a **stub `openai` CLI**, so the suite costs nothing, needs no network and no ChatGPT
 quota. Every check exists because a real bug got past its absence: a failed generation reported as
 a success, `-o` quietly forking into `-2`, `-3`, a Thai description collapsing to a generic
 filename, a JSON-RPC array killing the server.

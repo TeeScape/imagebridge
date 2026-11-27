@@ -22,7 +22,7 @@ import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -203,13 +203,15 @@ TOOLS = [
         "name": "edit_image",
         "title": "Edit part of an existing image",
         "description": (
-            "Change part of an image and keep the rest — the one thing generation cannot do. "
-            "Give the source image and what to change; add a mask to confine the edit, where the "
-            "mask's FULLY TRANSPARENT areas are the parts that get edited and it must be a PNG of "
-            "exactly the same dimensions as the image. Unlike generate_image this goes through the "
-            "OpenAI API, so it needs OPENAI_API_KEY and bills per call; say so before using it. "
-            "Every local check (files exist, mask is a PNG, has an alpha channel, matches the "
-            "image's size) runs before the request, so a mistake costs nothing."
+            "Change part of an image and keep the rest — the one thing plain generation cannot do. "
+            "By default this runs on the user's ChatGPT plan through Codex and costs no API money: "
+            "it is a real edit, measured as preserving a 1254x1254 icon's silhouette exactly while "
+            "changing its colour. Use it freely for recolouring, adding or removing an element, "
+            "restyling, or extending an image.\n\n"
+            "provider='api' switches to the OpenAI API, which BILLS PER CALL and needs "
+            "OPENAI_API_KEY. The only reasons to choose it are a pixel mask or an exact output "
+            "size, which the free path cannot do. Never pick it without telling the user it costs "
+            "money, and prefer the default."
         ),
         "inputSchema": {
             "type": "object",
@@ -219,9 +221,17 @@ TOOLS = [
                     "type": "array", "items": {"type": "string"},
                     "description": "Source image path(s), png/webp/jpg, at most 16. The first is the one a mask applies to.",
                 },
+                "provider": {
+                    "type": "string", "enum": ["codex", "api"],
+                    "description": "'codex' (default) runs on the ChatGPT plan and is free. 'api' bills per call and is only for a mask or an exact size.",
+                },
                 "mask": {
                     "type": "string",
-                    "description": "PNG whose transparent areas mark what to edit. Same dimensions as the first image.",
+                    "description": "API path only: a PNG whose transparent areas mark what to edit, same dimensions as the first image.",
+                },
+                "from_last": {
+                    "type": "integer",
+                    "description": "Codex path only: edit the last N images of the Codex conversation (1-5) instead of files on disk.",
                 },
                 "output_path": {"type": "string", "description": "Exact file path to write."},
                 "output_dir": {"type": "string", "description": "Directory to write into. Default: current directory."},
@@ -359,8 +369,60 @@ def tool_ask_codex(args):
 def tool_edit_image(args):
     prompt = args.get("prompt")
     images = args.get("images") or []
+    provider = (args.get("provider") or "codex").lower()
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("prompt is required and must be a non-empty string")
+    if provider not in ("codex", "api"):
+        raise ValueError("provider must be 'codex' or 'api'")
+
+    # ---- the free path, on the user's ChatGPT plan -------------------------
+    if provider == "codex":
+        if args.get("mask"):
+            raise ValueError(
+                "a pixel mask is only available on the API path, which bills per call. "
+                "Either describe in words which part to change (the free path handles that "
+                "well), or ask the user whether to spend an API call and pass provider='api'.")
+        from_last = args.get("from_last")
+        if not images and not from_last:
+            raise ValueError("give images (file paths) or from_last (1-5) to say what to edit")
+        cli = []
+        if args.get("output_path"):
+            cli += ["-o", str(args["output_path"])]
+        elif args.get("output_dir"):
+            cli += ["-d", str(args["output_dir"])]
+        for img in images:
+            if not os.path.isfile(img):
+                raise ValueError("image not found: %s" % img)
+            cli += ["-r", str(img)]
+        if from_last:
+            cli += ["--from-last", str(from_last)]
+        cli += ["--", prompt]
+        timeout = int(args.get("timeout_seconds") or IMAGE_TIMEOUT_DEFAULT)
+        proc = run_script("codex-image", cli, timeout)
+        if proc.returncode != 0:
+            raise RuntimeError("codex-image failed (exit %s).\n%s"
+                               % (proc.returncode, (proc.stderr or proc.stdout or "")[-1500:]))
+        paths = [l.strip() for l in proc.stdout.splitlines()
+                 if l.strip() and os.path.isfile(l.strip())]
+        if not paths:
+            raise RuntimeError("no edited image was produced.\n%s"
+                               % (proc.stdout or proc.stderr or "")[-1500:])
+        lines, blocks = [], []
+        for path in paths:
+            size = png_size(path)
+            lines.append("%s  (%s, %d bytes)" % (
+                path, ("%dx%d" % size) if size else "size unknown", os.path.getsize(path)))
+            blocks.append({"type": "resource_link", "uri": "file://" + path,
+                           "name": os.path.basename(path), "description": "Edited image",
+                           "mimeType": MIME_BY_EXT.get(os.path.splitext(path)[1].lower(),
+                                                       "application/octet-stream")})
+        return {"content": [{"type": "text", "text":
+                "Edited %d image%s on the ChatGPT plan (no API charge):\n%s\n\n"
+                "The original is untouched. Check the result before reporting it done."
+                % (len(paths), "" if len(paths) == 1 else "s", "\n".join(lines))}] + blocks,
+                "structuredContent": {"paths": paths, "provider": "codex"}}
+
+    # ---- the paid path: only for a mask or an exact size -------------------
     if not isinstance(images, list) or not images:
         raise ValueError("images is required and must be a non-empty array of paths")
 
@@ -401,9 +463,9 @@ def tool_edit_image(args):
                        "mimeType": MIME_BY_EXT.get(os.path.splitext(path)[1].lower(),
                                                    "application/octet-stream")})
     return {"content": [{"type": "text", "text":
-            "Edited %d image%s (billed to the OpenAI API):\n%s\n\nThe original was kept."
+            "Edited %d image%s — BILLED TO THE OPENAI API:\n%s\n\nThe original was kept."
             % (len(paths), "" if len(paths) == 1 else "s", "\n".join(lines))}] + blocks,
-            "structuredContent": {"paths": paths}}
+            "structuredContent": {"paths": paths, "provider": "api"}}
 
 
 def tool_check_setup(_args):

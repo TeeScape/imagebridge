@@ -19,7 +19,11 @@ Options
   -o, --out FILE        exact output path (parent dir is created)
   -d, --dir DIR         output directory; filename derived from the description
                         (default: current directory)
-  -r, --ref FILE        reference image to guide the result (repeatable)
+  -r, --ref FILE        edit this existing image, or use it as a reference
+                        (repeatable, at most 16). This is a real edit: the
+                        shape and composition are preserved.
+      --from-last N     edit the last N images of the Codex conversation
+                        (1-5) instead of a local file
   -m, --model MODEL     Codex model driving the generation
   -a, --all             keep every image this run produced, not just the newest
   -t, --transparent     ask for a transparent background (PNG)
@@ -42,7 +46,7 @@ Examples
 USAGE
 }
 
-OUT=""; DIR=""; MODEL=""; USER_CONFIG=0; VERBOSE=0; ALL=0; REFS=()
+OUT=""; DIR=""; MODEL=""; USER_CONFIG=0; VERBOSE=0; ALL=0; REFS=(); FROM_LAST=""
 TRANSPARENT=0; GIF=0; DRY_RUN=0; NO_CLOBBER=0
 
 POSITIONAL=()
@@ -52,6 +56,7 @@ while [ $# -gt 0 ]; do
     -d|--dir)      DIR="${2:?--dir needs a value}"; shift 2 ;;
     -r|--ref)      REFS+=("${2:?--ref needs a value}"); shift 2 ;;
     -m|--model)    MODEL="${2:?--model needs a value}"; shift 2 ;;
+    --from-last)   FROM_LAST="${2:?--from-last needs a value}"; shift 2 ;;
     -a|--all)      ALL=1; shift ;;
     -t|--transparent) TRANSPARENT=1; shift ;;
     --gif)         GIF=1; shift ;;
@@ -120,9 +125,40 @@ trap cleanup EXIT
 
 # The agent only has to generate; placement is this script's job. It gets a
 # throwaway workspace so a stray file never lands in the caller's project.
-# transparent_background and gif are real arguments of Codex's image tool, but
-# they are chosen by the model, so they are requested in words here.
+# Codex's image tool takes `referenced_image_paths` for edits — its own
+# instructions say "For edits, use referenced_image_paths when every target
+# image has a local file path". Naming the paths in the prompt is what makes
+# the model pass them, and it preserves the original: a measured edit of a
+# 1254x1254 icon came back 1254x1254 with a silhouette IoU of 1.000.
 EXTRA=""
+if [ ${#REFS[@]} -gt 0 ]; then
+  if [ ${#REFS[@]} -gt 16 ]; then
+    echo "codex-image: at most 16 reference images, got ${#REFS[@]}" >&2; exit 2
+  fi
+  LIST=""
+  for f in "${REFS[@]}"; do
+    [ -f "$f" ] || { echo "codex-image: reference image not found: $f" >&2; exit 1; }
+    abs=$(cd "$(dirname "$f")" && pwd)/$(basename "$f")
+    LIST="$LIST
+$abs"
+  done
+  EXTRA="$EXTRA
+Edit the existing image(s) below rather than drawing something new. Pass every
+one of these through referenced_image_paths, and change only what the request
+asks for — keep the composition, size and everything else as it is:$LIST"
+fi
+if [ -n "$FROM_LAST" ]; then
+  if [ ${#REFS[@]} -gt 0 ]; then
+    echo "codex-image: use either --ref or --from-last, never both" >&2; exit 2
+  fi
+  case "$FROM_LAST" in
+    [1-5]) ;;
+    *) echo "codex-image: --from-last must be between 1 and 5" >&2; exit 2 ;;
+  esac
+  EXTRA="$EXTRA
+Edit the most recent image(s) of this conversation: set
+num_last_images_to_include to $FROM_LAST. Change only what the request asks for."
+fi
 [ "$TRANSPARENT" -eq 1 ] && EXTRA="$EXTRA
 Use a transparent background (transparent_background), and output PNG."
 [ "$GIF" -eq 1 ] && EXTRA="$EXTRA
@@ -136,12 +172,9 @@ copy or move the result. When the image exists, reply with only its absolute pat
 ARGS=(exec --skip-git-repo-check --sandbox workspace-write -C "$SCRATCH")
 [ "$USER_CONFIG" -eq 1 ] || ARGS+=(--ignore-user-config)
 [ -n "$MODEL" ] && ARGS+=(-m "$MODEL")
-# `-i/--image` is variadic: it keeps eating arguments until the next flag, so the
-# reference list must come last and be terminated by `--` or it eats the prompt.
-for f in ${REFS+"${REFS[@]}"}; do
-  [ -f "$f" ] || { echo "codex-image: reference image not found: $f" >&2; exit 1; }
-  ARGS+=(-i "$f")
-done
+# The reference images are named in the prompt (referenced_image_paths), not
+# attached with `codex exec -i`: that flag is a vision attachment, a different
+# mechanism that costs more tokens and does not drive the edit path.
 ARGS+=(-- "$PROMPT")
 
 if [ "$DRY_RUN" -eq 1 ]; then
