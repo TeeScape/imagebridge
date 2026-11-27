@@ -180,7 +180,15 @@ ARGS=(exec --skip-git-repo-check --sandbox workspace-write -C "$SCRATCH")
 ARGS+=(-- "$PROMPT")
 
 if [ "$DRY_RUN" -eq 1 ]; then
-  printf 'codex'
+  # Machine-readable first, so a caller never has to reverse-engineer how %q
+  # chose to quote things, then the command itself for a human to read.
+  for f in ${REFS+"${REFS[@]}"}; do
+    printf 'referenced: %s\n' "$(cd -P "$(dirname "$f")" && pwd)/$(basename "$f")"
+  done
+  [ -n "$FROM_LAST" ] && printf 'from-last: %s\n' "$FROM_LAST"
+  [ "$TRANSPARENT" -eq 1 ] && printf 'transparent: yes\n'
+  [ "$GIF" -eq 1 ] && printf 'gif: yes\n'
+  printf 'command: codex'
   for a in "${ARGS[@]}"; do printf ' %q' "$a"; done
   printf '\n'
   exit 0

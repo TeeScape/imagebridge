@@ -145,7 +145,7 @@ echo
 echo "codex-image"
 out=$(bash "$SCRIPTS/codex-image" "a blue folder icon" -o "$WORK/a.png" --dry-run 2>&1); rc=$?
 is   "--dry-run exits 0"                "$rc" "0"
-has  "--dry-run shows the codex argv"   "$out" "codex exec"
+has  "--dry-run shows the codex argv"   "$out" "command: codex exec"
 [ -e "$WORK/a.png" ] && bad "--dry-run writes nothing" || ok "--dry-run writes nothing"
 
 out=$(STUB_MODE=ok bash "$SCRIPTS/codex-image" "a blue folder icon" -o "$WORK/a.png" 2>/dev/null); rc=$?
@@ -204,15 +204,16 @@ has   "an edit names the file for referenced_image_paths" "$out" "referenced_ima
 # to /private/var/folders and different shells report different forms, so a
 # string comparison here is a platform coin-flip. `-ef` asks the only question
 # that matters — does the path Codex is given point at the file we meant?
-ref_line=$(printf '%s' "$out" | grep -oE "/[^ '\\\\]*src\\.png" | head -1)
+ref_line=$(printf '%s\n' "$out" | sed -n 's/^referenced: //p' | head -1)
 if [ -n "$ref_line" ] && [ "$ref_line" -ef "$WORK/src.png" ]; then
   ok "the referenced path points at the right file"
 else
-  bad "the referenced path points at the right file" "extracted [$ref_line]"
+  bad "the referenced path points at the right file" "dry-run said: $(printf '%s' "$out" | head -3 | tr '\n' '|')"
 fi
 case "$ref_line" in /*) ok "the referenced path is absolute";; *) bad "the referenced path is absolute" "[$ref_line]";; esac
 hasnt "an edit does not attach with -i"                   "$out" " -i "
 out=$(bash "$SCRIPTS/codex-image" "x" --from-last 3 --dry-run 2>&1)
+has   "--from-last is reported by the dry run"            "$out" "from-last: 3"
 has   "--from-last drives num_last_images_to_include"     "$out" "num_last_images_to_include"
 out=$(bash "$SCRIPTS/codex-image" "x" -r "$WORK/src.png" --from-last 2 --dry-run 2>&1); rc=$?
 [ "$rc" -ne 0 ] && ok "--ref and --from-last together are refused" || bad "--ref and --from-last together are refused"
