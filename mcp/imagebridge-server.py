@@ -16,21 +16,25 @@ stdio transport rules this file obeys (MCP spec, basic/transports):
 import base64
 import json
 import os
+import signal
 import struct
 import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
-SUPPORTED_PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"]
+SUPPORTED_PROTOCOLS = ["2025-06-18"]
 LATEST_PROTOCOL = SUPPORTED_PROTOCOLS[0]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_ROOT = os.path.dirname(HERE)
 SCRIPT_DIR = os.path.join(PLUGIN_ROOT, "skills", "imagebridge", "scripts")
+
+MIME_BY_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+               ".webp": "image/webp", ".gif": "image/gif"}
 
 IMAGE_TIMEOUT_DEFAULT = 300
 ASK_TIMEOUT_DEFAULT = 600
@@ -50,25 +54,52 @@ def script_path(name):
     return path
 
 
+def _kill_group(proc):
+    """Terminate the child and anything it started."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return
+        try:
+            proc.wait(timeout=5)
+            return
+        except Exception:
+            continue
+
+
 def run_script(name, args, timeout):
     """Run a bundled script. Always `bash <path>` so a lost +x bit cannot break it."""
     cmd = ["bash", script_path(name)] + args
     log("run: %s" % " ".join(cmd[:3] + ["..."]))
+    # start_new_session puts the child in its own process group, so a timeout can
+    # kill codex *and* everything it spawned instead of orphaning them.
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,   # never let a child touch our protocol stdin
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=os.getcwd(),
+        start_new_session=True,
+    )
     try:
-        proc = subprocess.run(
-            cmd,
-            stdin=subprocess.DEVNULL,   # never let a child touch our protocol stdin
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=os.getcwd(),
-        )
+        out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        _kill_group(proc)
+        try:
+            proc.communicate(timeout=10)
+        except Exception:
+            pass
         raise RuntimeError(
-            "%s timed out after %ss. Image generation normally takes 45-60s; "
-            "raise the limit with the timeout_seconds argument." % (name, timeout)
+            "%s timed out after %ss and was terminated. Image generation normally "
+            "takes 45-60s; raise the limit with the timeout_seconds argument." % (name, timeout)
         )
-    return proc
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def png_size(path):
@@ -121,6 +152,10 @@ TOOLS = [
                 "keep_all": {
                     "type": "boolean",
                     "description": "Keep every image the run produced rather than only the newest. Default false.",
+                },
+                "transparent": {
+                    "type": "boolean",
+                    "description": "Ask for a transparent background. Real parameter of the image tool, but the model chooses it, so it is a strong request rather than a guarantee - check the result.",
                 },
                 "timeout_seconds": {
                     "type": "integer",
@@ -193,12 +228,20 @@ def tool_generate_image(args):
         cli += ["-r", str(ref)]
     if args.get("keep_all"):
         cli.append("-a")
+    if args.get("transparent"):
+        cli.append("-t")
+    cli.insert(0, "--")   # everything after this is the prompt, never a flag
 
     timeout = int(args.get("timeout_seconds") or IMAGE_TIMEOUT_DEFAULT)
     proc = run_script("codex-image", cli, timeout)
 
     paths = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
     paths = [p for p in paths if os.path.isfile(p)]
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError(
+            "codex-image failed (exit %s); not treating this as a success even though "
+            "%d path(s) were printed.\n%s" % (proc.returncode, len(paths), detail[-1500:]))
     if not paths:
         detail = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError(
@@ -216,7 +259,7 @@ def tool_generate_image(args):
                 "uri": "file://" + path,
                 "name": os.path.basename(path),
                 "description": "Generated image",
-                "mimeType": "image/png",
+                "mimeType": MIME_BY_EXT.get(os.path.splitext(path)[1].lower(), "application/octet-stream"),
             }
         )
 
@@ -288,20 +331,22 @@ def tool_check_setup(_args):
             return None
 
     codex = probe(["codex", "--version"])
+    auth = probe(["codex", "login", "status"]) if codex else None
     report = [
         "Codex CLI    : %s" % (codex or "NOT INSTALLED - brew install --cask codex, or npm install -g @openai/codex"),
-        "Codex auth   : %s" % (probe(["codex", "login", "status"]) or "unknown - run `codex login` yourself" if codex else "n/a"),
+        "Codex auth   : %s" % ((auth or "unknown - run `codex login` yourself") if codex else "n/a"),
         "OpenAI CLI   : %s" % (probe(["openai", "--version"]) or "not installed (only needed for exact-size images)"),
         "OPENAI_API_KEY: %s" % ("set" if os.environ.get("OPENAI_API_KEY") else "not set (fine - the Codex path does not use it)"),
         "Scripts      : %s" % (SCRIPT_DIR if os.path.isdir(SCRIPT_DIR) else "MISSING at " + SCRIPT_DIR),
         "Server       : %s %s on python %s" % (SERVER_NAME, SERVER_VERSION, sys.version.split()[0]),
     ]
-    ready = bool(codex) and os.path.isdir(SCRIPT_DIR)
+    signed_in = bool(codex) and bool(auth) and "logged in" in auth.lower()
+    ready = bool(codex) and signed_in and os.path.isdir(SCRIPT_DIR)
     report.append("")
     report.append("Ready to generate images: %s" % ("yes" if ready else "no - fix the lines above"))
     return {
         "content": [{"type": "text", "text": "\n".join(report)}],
-        "structuredContent": {"ready": ready, "codex_installed": bool(codex)},
+        "structuredContent": {"ready": ready, "codex_installed": bool(codex), "signed_in": signed_in},
     }
 
 
@@ -379,11 +424,16 @@ def main():
                                   "error": {"code": -32700, "message": "Parse error"}}) + "\n")
             out.flush()
             continue
+        if not isinstance(message, dict):
+            sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": None,
+                             "error": {"code": -32600, "message": "Invalid Request: expected an object"}}) + "\n")
+            sys.stdout.flush()
+            continue
         try:
             response = handle(message)
         except Exception as exc:
             log("handler crashed: %r" % exc)
-            response = {"jsonrpc": "2.0", "id": message.get("id"),
+            response = {"jsonrpc": "2.0", "id": message.get("id") if isinstance(message, dict) else None,
                         "error": {"code": -32603, "message": "Internal error: %s" % exc}}
         if response is not None:
             out.write(json.dumps(response) + "\n")

@@ -17,8 +17,18 @@ while [ -L "$SRC" ]; do
   SRC=$(readlink "$SRC")
   case "$SRC" in /*) ;; *) SRC="$LDIR/$SRC" ;; esac
 done
-SELF=$(cd -P "$(dirname "$SRC")/.." && pwd)
+# scripts/ -> skills/imagebridge/ -> skills/ -> plugin root. .env.example and the
+# docs both live at the plugin root, so resolve to there; fall back to searching
+# upward so the script still works if it is moved or symlinked elsewhere.
+SELF=$(cd -P "$(dirname "$SRC")/../../.." && pwd)
 ENVFILE="${OPENAI_CLI_ENV:-$SELF/.env}"
+if [ ! -f "$ENVFILE" ] && [ -z "${OPENAI_CLI_ENV:-}" ]; then
+  d=$(cd -P "$(dirname "$SRC")" && pwd)
+  while [ "$d" != "/" ]; do
+    if [ -f "$d/.env" ]; then ENVFILE="$d/.env"; break; fi
+    d=$(dirname "$d")
+  done
+fi
 
 if [ -z "${OPENAI_API_KEY:-}" ] && [ -f "$ENVFILE" ]; then
   set -a; . "$ENVFILE"; set +a

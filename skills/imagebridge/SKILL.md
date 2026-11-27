@@ -52,6 +52,8 @@ bash "$SCRIPTS/codex-image" "<description>" -o path/to/file.png   # exact path
 bash "$SCRIPTS/codex-image" "<description>" -d assets/            # dir, name from description
 bash "$SCRIPTS/codex-image" "<description>" -r reference.png -d out
 bash "$SCRIPTS/codex-image" "<description>" -o a.png -a           # keep every image produced
+bash "$SCRIPTS/codex-image" "<description>" -o icon.png -t        # transparent background
+bash "$SCRIPTS/codex-image" "<description>" --dry-run             # show the command, spend nothing
 ```
 
 stdout is the absolute path of the saved file, one per line:
@@ -64,9 +66,12 @@ IMG=$(bash "$SCRIPTS/codex-image" "flat vector icon of a blue folder" -o assets/
   No `OPENAI_API_KEY`, no per-image API charge.
 - **~45–60 s and ~10–12k Codex tokens per image.** Real quota. Say you are starting before you run
   it, and never call it speculatively or in a loop without the user agreeing first.
-- **The model picks the dimensions, not you** — 1254×1254 and 1536×1024 have both come out of the
-  same script. There is no size, quality or count flag on this path. When exact dimensions matter,
-  use `openai-image`, or resize afterwards. Check the real size with `file` before reporting.
+- **The size cannot be set here.** Codex's image tool takes five arguments and none is a size, so
+  this is a property of the tool, not a missing flag. Wording steers it — "square icon" reliably
+  comes back 1:1 — but never promise a size on this path. When the user needs one, use
+  `openai-image`. Always check the real dimensions before reporting the result.
+- **Transparency is free here**: pass `-t/--transparent`. `transparent_background` is one of the
+  five real arguments, so it does not need the API key path. `--gif` likewise asks for animation.
 - The script places the file itself, reading Codex's own `~/.codex/generated_images/<session>/`,
   so the path it prints is reliable — the model is never trusted with placement.
 - Afterwards: read the file to confirm it is what was asked for, then show it with `SendUserFile`.

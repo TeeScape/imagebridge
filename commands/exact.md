@@ -6,8 +6,10 @@ argument-hint: "<description> [--size 1024x1024] [--quality high] [-n 2]"
 Generate an image through the OpenAI **API**: $ARGUMENTS
 
 Use this path only when the user needs control `/imagebridge:draw` cannot give — an exact size,
-a quality level, several images at once, or a transparent background. It bills their OpenAI API
-account per image, unlike the Codex path which runs on the ChatGPT plan.
+a quality level, or several images at once. It bills their OpenAI API account per image, unlike
+the Codex path which runs on the ChatGPT plan.
+
+Transparency alone is **not** a reason to come here: `/imagebridge:draw -t` does that for free.
 
 1. Resolve `scripts/openai-image` by the same chain (`${CLAUDE_SKILL_DIR}/scripts/openai-image`, then
    `${CLAUDE_PLUGIN_ROOT}/skills/imagebridge/scripts/openai-image`, then Glob). Invoke with `bash "<path>"`.

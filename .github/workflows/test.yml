@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    # Linux is not optional here. Three of the bugs this suite exists for were
+    # GNU-vs-BSD differences that a macOS-only run cannot see: `mktemp -t`,
+    # empty `xargs`, and `date -d`.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show the toolchain under test
+        run: |
+          uname -a
+          bash --version | head -1
+          python3 --version
+          mktemp --version 2>/dev/null | head -1 || echo "mktemp: BSD (no --version)"
+      - name: Run the suite
+        run: ./tests/run.sh
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning skills/imagebridge/scripts/* tests/run.sh

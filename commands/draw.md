@@ -28,8 +28,10 @@ Generate an image with the Codex CLI: $ARGUMENTS
 
 4. It prints the saved file's absolute path on stdout, one per line. Afterwards:
    - Read the file to confirm it is really an image and really what was asked for.
-   - Check its actual pixel size — the model chooses the dimensions and will not obey a size request
-     on this path. If the user needs exact dimensions, say so and point at `/imagebridge:exact`.
+   - Check its actual pixel size. The size cannot be set on this path at all — the image tool has
+     no size argument — so if the user needs a specific one, say so plainly and point at
+     `/imagebridge:exact`. Wording like "square icon" steers it but guarantees nothing.
+   - For a transparent background use `-t`; that one IS supported here and needs no API key.
    - Show it to the user with `SendUserFile`.
 
 If it fails, re-run once with `-v` to get the Codex transcript, then report what actually went wrong.

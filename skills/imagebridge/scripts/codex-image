@@ -22,9 +22,17 @@ Options
   -r, --ref FILE        reference image to guide the result (repeatable)
   -m, --model MODEL     Codex model driving the generation
   -a, --all             keep every image this run produced, not just the newest
+  -t, --transparent     ask for a transparent background (PNG)
+      --gif             ask for an animated GIF instead of a still image
+      --no-clobber      never overwrite; add -2, -3 ... instead
+      --dry-run         print the exact codex command and exit, generating nothing
       --user-config     load ~/.codex/config.toml (off by default)
   -v, --verbose         print the Codex transcript to stderr
   -h, --help            this help
+
+Note: the size and aspect ratio cannot be set on this path — Codex's image tool
+takes no size argument. Wording like "square icon" or "wide banner" steers it,
+but nothing guarantees it. Use openai-image when a size is required.
 
 stdout: one absolute path per line. Exit non-zero if nothing was generated.
 
@@ -35,6 +43,7 @@ USAGE
 }
 
 OUT=""; DIR=""; MODEL=""; USER_CONFIG=0; VERBOSE=0; ALL=0; REFS=()
+TRANSPARENT=0; GIF=0; DRY_RUN=0; NO_CLOBBER=0
 
 POSITIONAL=()
 while [ $# -gt 0 ]; do
@@ -44,6 +53,10 @@ while [ $# -gt 0 ]; do
     -r|--ref)      REFS+=("${2:?--ref needs a value}"); shift 2 ;;
     -m|--model)    MODEL="${2:?--model needs a value}"; shift 2 ;;
     -a|--all)      ALL=1; shift ;;
+    -t|--transparent) TRANSPARENT=1; shift ;;
+    --gif)         GIF=1; shift ;;
+    --no-clobber)  NO_CLOBBER=1; shift ;;
+    --dry-run)     DRY_RUN=1; shift ;;
     --user-config) USER_CONFIG=1; shift ;;
     -v|--verbose)  VERBOSE=1; shift ;;
     -h|--help)     usage; exit 0 ;;
@@ -76,23 +89,46 @@ else
   DIR="${DIR:-.}"
   mkdir -p "$DIR" || exit 1
   DEST_DIR=$(cd "$DIR" && pwd)
-  # slug from the first words of the description
+  # Slug from the first words of the description. Only characters that are
+  # unsafe in a filename are replaced, so a Thai (or any non-ASCII) description
+  # keeps its own words instead of collapsing to a generic name. The length is
+  # capped by whole words, never mid-character.
   DEST_NAME=$(printf '%s' "$DESC" | tr '[:upper:]' '[:lower:]' \
-    | sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-//' -e 's/-$//' | cut -c1-48)
+    | sed -e 's@[][/\\:*?"<>|`$()&;!'"'"']@ @g' \
+          -e 's/[[:space:]][[:space:]]*/-/g' -e 's/--*/-/g' \
+          -e 's/^-//' -e 's/-$//' \
+    | awk -F- '{ n = (NF > 8 ? 8 : NF); out = $1; for (i = 2; i <= n; i++) out = out "-" $i; print out }')
   [ -z "$DEST_NAME" ] && DEST_NAME="codex-image"
   DEST_NAME="$DEST_NAME.png"
   FIXED_NAME=0
 fi
 
-SCRATCH=$(mktemp -d -t codex-image) || exit 1
+# GNU mktemp requires a template ending in XXX; BSD's `-t prefix` does not work
+# there at all, so spell the template out. This used to kill the script on Linux
+# before codex was ever invoked.
+SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/codex-image.XXXXXXXX") || {
+  echo "codex-image: could not create a temporary directory" >&2; exit 1; }
 LOG="$SCRATCH/transcript.log"
 STAMP="$SCRATCH/stamp"
+KEEP_LOG_AT=""
 : >"$LOG"; : >"$STAMP"
-trap 'rm -rf "$SCRATCH"' EXIT
+cleanup() {
+  if [ -n "$KEEP_LOG_AT" ] && [ -f "$LOG" ]; then cp "$LOG" "$KEEP_LOG_AT" 2>/dev/null; fi
+  rm -rf "$SCRATCH"
+}
+trap cleanup EXIT
 
 # The agent only has to generate; placement is this script's job. It gets a
 # throwaway workspace so a stray file never lands in the caller's project.
-PROMPT="\$imagegen $DESC
+# transparent_background and gif are real arguments of Codex's image tool, but
+# they are chosen by the model, so they are requested in words here.
+EXTRA=""
+[ "$TRANSPARENT" -eq 1 ] && EXTRA="$EXTRA
+Use a transparent background (transparent_background), and output PNG."
+[ "$GIF" -eq 1 ] && EXTRA="$EXTRA
+Produce an animated GIF (gif), not a still image."
+
+PROMPT="\$imagegen $DESC$EXTRA
 
 Generate the image. Do not ask questions, do not write any other files, do not
 copy or move the result. When the image exists, reply with only its absolute path."
@@ -108,6 +144,13 @@ for f in ${REFS+"${REFS[@]}"}; do
 done
 ARGS+=(-- "$PROMPT")
 
+if [ "$DRY_RUN" -eq 1 ]; then
+  printf 'codex'
+  for a in "${ARGS[@]}"; do printf ' %q' "$a"; done
+  printf '\n'
+  exit 0
+fi
+
 codex "${ARGS[@]}" </dev/null >"$LOG" 2>&1
 RC=$?
 [ "$VERBOSE" -eq 1 ] && cat "$LOG" >&2
@@ -115,15 +158,34 @@ RC=$?
 # Collect what this run generated, newest first.
 FOUND="$SCRATCH/found"
 : >"$FOUND"
+# NOTE: never pipe straight into xargs here. With no matches, GNU xargs still
+# runs `ls -t` once, which lists the CURRENT DIRECTORY — a failed run would then
+# copy a random project file and report it as the generated image. Writing the
+# matches to a file and testing it first removes that hazard on every platform.
+RAW="$SCRATCH/found.raw"
+: >"$RAW"
 if [ -d "$GEN_ROOT" ]; then
   find "$GEN_ROOT" -type f -newer "$STAMP" \
-    \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) \
-    -print0 2>/dev/null | xargs -0 ls -t 2>/dev/null >"$FOUND"
+    \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' -o -iname '*.gif' \) \
+    -print0 >"$RAW" 2>/dev/null
+fi
+if [ -s "$RAW" ]; then
+  xargs -0 ls -t <"$RAW" >"$FOUND" 2>/dev/null
+fi
+
+if [ "$RC" -ne 0 ]; then
+  # Previously a stray newer file could make a failed run look like a success.
+  KEEP_LOG_AT="$DEST_DIR/codex-image-failure.log"
+  echo "codex-image: codex exited $RC — treating this run as failed." >&2
+  echo "--- codex transcript (also saved to $KEEP_LOG_AT) ---" >&2
+  cat "$LOG" >&2
+  exit "$RC"
 fi
 
 if [ ! -s "$FOUND" ]; then
+  KEEP_LOG_AT="$DEST_DIR/codex-image-failure.log"
   echo "codex-image: no image was generated (codex exit $RC)." >&2
-  echo "--- codex transcript ---" >&2
+  echo "--- codex transcript (also saved to $KEEP_LOG_AT) ---" >&2
   cat "$LOG" >&2
   exit 1
 fi
@@ -134,13 +196,27 @@ i=0
 while IFS= read -r src; do
   [ -n "$src" ] || continue
   ext="${src##*.}"
-  if [ "$FIXED_NAME" -eq 1 ]; then base="${DEST_NAME%.*}"; dext="${DEST_NAME##*.}"
-  else                            base="${DEST_NAME%.*}"; dext="$ext"; fi
+  base="${DEST_NAME%.*}"
+  if [ "$FIXED_NAME" -eq 1 ]; then
+    case "$DEST_NAME" in
+      *.*) dext="${DEST_NAME##*.}" ;;
+      *)   dext="$ext"; base="$DEST_NAME" ;;   # `-o myicon` must not become myicon.myicon
+    esac
+    if [ "$dext" != "$ext" ]; then
+      echo "codex-image: codex returned .$ext; saving with the .$dext name you asked for" >&2
+    fi
+  else
+    dext="$ext"
+  fi
   i=$((i+1))
   cand="$DEST_DIR/$base.$dext"
   [ "$i" -gt 1 ] && cand="$DEST_DIR/$base-$i.$dext"
-  n=2
-  while [ -e "$cand" ]; do cand="$DEST_DIR/$base-$n.$dext"; n=$((n+1)); done
+  # An explicit -o names one path and means it: overwrite, unless --no-clobber.
+  # Without -o the name is derived, so never destroy an unrelated file.
+  if [ "$FIXED_NAME" -eq 0 ] || [ "$NO_CLOBBER" -eq 1 ] || [ "$i" -gt 1 ]; then
+    n=2
+    while [ -e "$cand" ]; do cand="$DEST_DIR/$base-$n.$dext"; n=$((n+1)); done
+  fi
   cp "$src" "$cand" || exit 1
   printf '%s\n' "$cand"
 done <"$FOUND"

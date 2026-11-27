@@ -44,7 +44,7 @@ The plugin also ships an **MCP server**, so Claude gets real typed tools instead
 
 | tool | does |
 |---|---|
-| `generate_image` | prompt, optional `output_path` / `output_dir` / `reference_images` → returns the saved path |
+| `generate_image` | prompt, optional `output_path` / `output_dir` / `reference_images` / `transparent` → returns the saved path |
 | `ask_codex` | prompt, optional `cwd` / `allow_writes` / `images` / `stdin_text` → returns Codex's answer |
 | `check_setup` | reports what is installed, signed in and missing |
 
@@ -126,8 +126,14 @@ saved file's absolute path, `codex-ask` prints Codex's final message. `-h` gives
 
 - `codex-ask`, simple round trip: **~8 s**, ~3k tokens.
 - `codex-image`: **~45–60 s**, ~10–12k tokens per image.
-- **You do not control the image size on the Codex path.** The model decides — 1254×1254 and
-  1536×1024 both came out of the same call. Use `openai-image` when a size is required.
+- **You cannot set the image size on the Codex path.** This is not a missing flag: Codex's image
+  tool takes exactly five arguments — `prompt`, `gif`, `transparent_background`,
+  `referenced_image_paths`, `num_last_images_to_include` — and none of them is a size. Wording
+  *steers* it (across 146 generations, every prompt containing "icon" or "square" came back 1:1,
+  while unqualified ones came back 3:2), but nothing guarantees it. Use `/imagebridge:exact` when
+  a size is a requirement rather than a preference.
+- **Transparency, however, is available for free.** `transparent_background` is one of those five
+  arguments, so `-t/--transparent` works on the Codex path without an API key.
 
 ## Why the scripts exist instead of calling `codex` directly
 
@@ -177,6 +183,20 @@ PATH, which would let the skill call `codex-image` as a bare command instead of
 If you want the commands on your PATH anyway, `./install.sh` symlinks them into `~/bin`, which
 keeps that choice with the user instead of baking it into the plugin.
 
+## Tests
+
+```bash
+./tests/run.sh
+```
+
+31 checks against a **stub codex**, so the suite costs nothing, needs no network and no ChatGPT
+quota. Every check exists because a real bug got past its absence: a failed generation reported as
+a success, `-o` quietly forking into `-2`, `-3`, a Thai description collapsing to a generic
+filename, a JSON-RPC array killing the server.
+
+CI runs it on **ubuntu-latest as well as macos-latest**, which is not optional: three of the bugs
+it guards against are GNU-vs-BSD differences that a macOS-only run cannot see.
+
 ## Repo layout
 
 ```
@@ -184,6 +204,8 @@ keeps that choice with the user instead of baking it into the plugin.
 commands/           the four slash commands
 skills/imagebridge/ SKILL.md and the three bash scripts it drives
 mcp/                the zero-dependency MCP server
+tests/              the stub-codex suite
+.github/workflows/  CI on Linux and macOS
 assets/             logo, icon, social preview
 ```
 
