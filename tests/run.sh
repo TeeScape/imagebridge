@@ -200,8 +200,17 @@ hasnt "a Thai description keeps its words" "$out" "codex-image.png"
 make_png "$WORK/src.png" 64 64 0
 out=$(bash "$SCRIPTS/codex-image" "make it green" -r "$WORK/src.png" --dry-run 2>&1)
 has   "an edit names the file for referenced_image_paths" "$out" "referenced_image_paths"
-src_abs="$(cd -P "$WORK" && pwd)/src.png"
-haspath "an edit passes the absolute path"                "$out" "$src_abs"
+# Compare by file identity, not by spelling: on macOS /var/folders is a symlink
+# to /private/var/folders and different shells report different forms, so a
+# string comparison here is a platform coin-flip. `-ef` asks the only question
+# that matters — does the path Codex is given point at the file we meant?
+ref_line=$(printf '%s' "$out" | grep -oE "/[^ '\\\\]*src\\.png" | head -1)
+if [ -n "$ref_line" ] && [ "$ref_line" -ef "$WORK/src.png" ]; then
+  ok "the referenced path points at the right file"
+else
+  bad "the referenced path points at the right file" "extracted [$ref_line]"
+fi
+case "$ref_line" in /*) ok "the referenced path is absolute";; *) bad "the referenced path is absolute" "[$ref_line]";; esac
 hasnt "an edit does not attach with -i"                   "$out" " -i "
 out=$(bash "$SCRIPTS/codex-image" "x" --from-last 3 --dry-run 2>&1)
 has   "--from-last drives num_last_images_to_include"     "$out" "num_last_images_to_include"
