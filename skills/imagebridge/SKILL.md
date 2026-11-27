@@ -154,6 +154,10 @@ Pass either `regions` (`[x, y, w, h]` boxes) or a `mask` PNG the size of the ima
 **whole** object, shadow and thin parts included: a box that clips an edge leaves a stub behind,
 and that — not the model — is what usually makes a result look bad.
 
+It fills a cropped window around each hole, so a small removal from a large photo stays sharp;
+the result says how many windows were used and what resolution the fill was rendered at. Holes
+near each other share a window, so cost is one request per cluster, not per rectangle.
+
 It **removes**; it does not invent. "Delete the car" yes; "add a car" no, that is an edit.
 Pixels outside the mask are bit-for-bit unchanged, because the fill is composed through the mask.
 

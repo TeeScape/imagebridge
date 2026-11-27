@@ -24,7 +24,7 @@ import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.8.0"
+SERVER_VERSION = "0.9.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -632,6 +632,30 @@ def tool_edit_image(args):
             "structuredContent": {"paths": paths, "provider": "api"}}
 
 
+def _post_png(url, payload, timeout):
+    # Identify ourselves. urllib's default is "Python-urllib/3.x", which any
+    # sensible bot filter blocks on sight — including the one in front of the
+    # server this was first pointed at.
+    req = urllib.request.Request(
+        url, data=payload, method="POST",
+        headers={"Content-Type": "image/png",
+                 "User-Agent": "imagebridge/%s (object removal)" % SERVER_VERSION})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError("the inpaint server answered %s %s" % (exc.code, exc.reason))
+    except Exception as exc:
+        hint = ""
+        if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+            hint = ("\nThis is a certificate store problem on this machine, not a problem with "
+                    "the server: this Python cannot find a CA bundle. On macOS run the "
+                    "'Install Certificates.command' that ships with Python, or point SSL_CERT_FILE "
+                    "at a bundle such as /etc/ssl/cert.pem. Do not work around it by disabling "
+                    "verification.")
+        raise RuntimeError("could not reach the inpaint server at %s: %s%s" % (url, exc, hint))
+
+
 def tool_remove_object(args):
     if imagelib is None:
         raise RuntimeError("imagelib is unavailable (%s), so this cannot run" % _IMAGELIB_ERROR)
@@ -656,66 +680,63 @@ def tool_remove_object(args):
     mask = (imagelib.mask_from_png(mask_path, width, height) if mask_path
             else imagelib.rect_mask(width, height, regions))
 
-    N = INPAINT_TILE
-    small = imagelib.resize(pixels, width, height, N, N, channels)
-    # Carry the hole through the same resampler, then take anything that picked
-    # up a trace of it: a hole that shrinks under downsampling leaves a rim of
-    # the thing we were asked to remove.
-    hole_src = bytes(0 if m else 255 for m in mask)
-    hole_small = imagelib.resize(hole_src, width, height, N, N, 1)
-    mask_small = bytes(0 if h > 2 else 1 for h in hole_small)
-    payload = imagelib.write_png(None, N, N, 4,
-                                 imagelib.to_rgba_with_hole(small, N, N, channels, mask_small))
-
     timeout = int(args.get("timeout_seconds") or 120)
-    # Identify ourselves. urllib's default is "Python-urllib/3.x", which any
-    # sensible bot filter blocks on sight — including the one in front of the
-    # server this was first pointed at.
-    req = urllib.request.Request(
-        url, data=payload, method="POST",
-        headers={"Content-Type": "image/png",
-                 "User-Agent": "imagebridge/%s (object removal)" % SERVER_VERSION})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            filled_png = resp.read()
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError("the inpaint server answered %s %s" % (exc.code, exc.reason))
-    except Exception as exc:
-        hint = ""
-        if "CERTIFICATE_VERIFY_FAILED" in str(exc):
-            hint = ("\nThis is a certificate store problem on this machine, not a problem with "
-                    "the server: this Python cannot find a CA bundle. On macOS run the "
-                    "'Install Certificates.command' that ships with Python, or point SSL_CERT_FILE "
-                    "at a bundle such as /etc/ssl/cert.pem. Do not work around it by disabling "
-                    "verification.")
-        raise RuntimeError("could not reach the inpaint server at %s: %s%s" % (url, exc, hint))
+    N = INPAINT_TILE
+    # One request per hole, on a crop around it, rather than one request for the
+    # whole picture. The model only ever sees a 512 square, so sending a 4000px
+    # photo renders the fill at an eighth of the picture's resolution and returns
+    # a soft patch in a sharp photograph. A hole big enough to need everything
+    # gives back a single full-frame window, which is what this used to do.
+    wins = imagelib.windows(mask, width, height, tile=N)
+    out = bytearray(pixels)
 
-    try:
-        fw, fh, fch, fpx = imagelib.read_png_bytes(filled_png)
-    except Exception as exc:
-        raise RuntimeError("the inpaint server did not return a usable PNG: %s" % exc)
-    if fch != 3:   # compose() reads the fill as RGB
-        fpx = b"".join(fpx[i * fch:i * fch + 3] for i in range(fw * fh))
+    for win in wins:
+        ww, wh = win[2], win[3]
+        _, _, sub = imagelib.crop(pixels, width, height, channels, win)
+        submask = imagelib.crop_mask(mask, width, win)
+        small = imagelib.resize(sub, ww, wh, N, N, channels)
+        # Carry the hole through the same resampler, then take anything that
+        # picked up a trace of it: a hole that shrinks under downsampling leaves
+        # a rim of the thing we were asked to remove.
+        hole_src = bytes(0 if m else 255 for m in submask)
+        hole_small = imagelib.resize(hole_src, ww, wh, N, N, 1)
+        mask_small = bytes(0 if h > 2 else 1 for h in hole_small)
+        payload = imagelib.write_png(None, N, N, 4,
+                                     imagelib.to_rgba_with_hole(small, N, N, channels, mask_small))
+        filled_png = _post_png(url, payload, timeout)
+        try:
+            fw, fh, fch, fpx = imagelib.read_png_bytes(filled_png)
+        except Exception as exc:
+            raise RuntimeError("the inpaint server did not return a usable PNG: %s" % exc)
+        if fch != 3:   # compose() reads the fill as RGB
+            fpx = b"".join(fpx[i * fch:i * fch + 3] for i in range(fw * fh))
+        imagelib.paste(out, width, channels, win,
+                       imagelib.compose(fpx, fw, fh, sub, ww, wh, channels, submask))
 
     out_path = args.get("output_path") or (os.path.splitext(image)[0] + "-removed.png")
     os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
-    imagelib.write_png(out_path, width, height, channels,
-                       imagelib.compose(fpx, fw, fh, pixels, width, height, channels, mask))
+    imagelib.write_png(out_path, width, height, channels, bytes(out))
 
     removed = sum(1 for m in mask if not m)
     previews, notes = _image_blocks([out_path], args.get("return_image"))
-    text = ("Removed %d pixel%s (%.1f%% of the image) and filled the gap.\n%s  (%s)\n\n"
+    biggest = max(w[2] for w in wins)
+    text = ("Removed %d pixel%s (%.1f%% of the image) and filled the gap.\n%s  (%s)\n"
+            "Filled in %d window%s, the largest %dpx wide, so the fill is rendered at %d%% of "
+            "the picture's own resolution.\n\n"
             "The original is untouched. This fills from the surroundings — check that the result "
-            "is plausible rather than assuming it is."
+            "is plausible rather than assuming it is. inspect_image with compare_to will tell you "
+            "exactly where the change landed."
             % (removed, "" if removed == 1 else "s", 100.0 * removed / (width * height),
-               out_path, _describe(out_path)))
+               out_path, _describe(out_path), len(wins), "" if len(wins) == 1 else "s",
+               biggest, round(100.0 * N / biggest)))
     if notes:
         text += "\n" + "\n".join("- " + n for n in notes)
     return {"content": [{"type": "text", "text": text}] + previews
             + [{"type": "resource_link", "uri": "file://" + out_path,
                 "name": os.path.basename(out_path), "description": "Object removed",
                 "mimeType": "image/png"}],
-            "structuredContent": {"path": out_path, "removed_pixels": removed}}
+            "structuredContent": {"path": out_path, "removed_pixels": removed,
+                                  "windows": wins, "tile": N}}
 
 
 def _hex(rgb):

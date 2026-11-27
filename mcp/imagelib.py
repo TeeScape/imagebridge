@@ -378,3 +378,102 @@ def diff(a, b, tolerance=8):
         "silhouette_iou": round(inter / union, 4) if union else None,
         "tolerance": tolerance,
     }
+
+
+def crop(pixels, width, height, channels, box):
+    """The (w, h, pixels) of a rectangle. box is [x, y, w, h], already in range."""
+    x, y, w, h = box
+    out = bytearray(w * h * channels)
+    for yy in range(h):
+        src = ((y + yy) * width + x) * channels
+        dst = yy * w * channels
+        out[dst:dst + w * channels] = pixels[src:src + w * channels]
+    return w, h, bytes(out)
+
+
+def crop_mask(mask, width, box):
+    x, y, w, h = box
+    out = bytearray(w * h)
+    for yy in range(h):
+        src = (y + yy) * width + x
+        out[yy * w:(yy + 1) * w] = mask[src:src + w]
+    return bytes(out)
+
+
+def paste(dest, width, channels, box, patch):
+    """Write a patch back into dest at box. dest is a bytearray, modified in place."""
+    x, y, w, h = box
+    for yy in range(h):
+        dst = ((y + yy) * width + x) * channels
+        src = yy * w * channels
+        dest[dst:dst + w * channels] = patch[src:src + w * channels]
+
+
+def windows(mask, width, height, tile=512, margin=0.6):
+    """Rectangles to inpaint one at a time, instead of the whole picture.
+
+    The model works on a fixed `tile` square, so feeding it a 4000px photo
+    means the fill is rendered at an eighth of the picture's resolution and
+    comes back visibly soft against its sharp surroundings. Cropping a window
+    around each hole and filling that instead keeps the fill at full detail -
+    and a window smaller than the tile loses nothing at all.
+
+    `margin` is how much context to add around a hole, as a fraction of its
+    size: LaMa needs to see what it is continuing. Windows that overlap are
+    merged, so holes close together cost one request, and a hole large enough
+    to need the whole picture degrades to exactly the old behaviour.
+    """
+    # Connected holes, found with a flood fill over 4-neighbours.
+    seen = bytearray(width * height)
+    boxes = []
+    for start in range(width * height):
+        if mask[start] or seen[start]:
+            continue
+        stack, x0, y0, x1, y1 = [start], start % width, start // width, start % width, start // width
+        seen[start] = 1
+        while stack:
+            i = stack.pop()
+            x, y = i % width, i // width
+            x0, y0, x1, y1 = min(x0, x), min(y0, y), max(x1, x), max(y1, y)
+            for j, ok in ((i - 1, x > 0), (i + 1, x < width - 1),
+                          (i - width, y > 0), (i + width, y < height - 1)):
+                if ok and not mask[j] and not seen[j]:
+                    seen[j] = 1
+                    stack.append(j)
+        boxes.append([x0, y0, x1, y1])
+
+    def grown(b):
+        x0, y0, x1, y1 = b
+        w, h = x1 - x0 + 1, y1 - y0 + 1
+        pad = int(max(w, h) * margin) + 1
+        side = max(w, h) + 2 * pad
+        # A square window keeps the aspect ratio through the square tile, so
+        # nothing is stretched on the way in and squashed on the way out.
+        side = min(side, width, height)
+        cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+        wx = max(0, min(width - side, cx - side // 2))
+        wy = max(0, min(height - side, cy - side // 2))
+        return [wx, wy, wx + side - 1, wy + side - 1]
+
+    wins = [grown(b) for b in boxes]
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(wins)):
+            for j in range(i + 1, len(wins)):
+                a, b = wins[i], wins[j]
+                if a[0] <= b[2] and b[0] <= a[2] and a[1] <= b[3] and b[1] <= a[3]:
+                    side = max(max(a[2], b[2]) - min(a[0], b[0]) + 1,
+                               max(a[3], b[3]) - min(a[1], b[1]) + 1)
+                    side = min(side, width, height)
+                    cx = (min(a[0], b[0]) + max(a[2], b[2])) // 2
+                    cy = (min(a[1], b[1]) + max(a[3], b[3])) // 2
+                    wx = max(0, min(width - side, cx - side // 2))
+                    wy = max(0, min(height - side, cy - side // 2))
+                    wins[i] = [wx, wy, wx + side - 1, wy + side - 1]
+                    wins.pop(j)
+                    merged = True
+                    break
+            if merged:
+                break
+    return [[x0, y0, x1 - x0 + 1, y1 - y0 + 1] for x0, y0, x1, y1 in wins]

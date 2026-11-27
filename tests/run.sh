@@ -443,6 +443,37 @@ jhas "needs regions or a mask"          "$r" "d['result'].get('isError') is True
 r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\",\"regions\":[[900,900,10,10]]}}}" | tail -1)
 jhas "a region outside the image fails" "$r" "d['result'].get('isError') is True"
 
+r=$(python3 - "$ROOT" <<'MK'
+import sys; sys.path.insert(0, sys.argv[1] + "/mcp"); import imagelib as L
+W = 1200
+one  = L.windows(L.rect_mask(W, W, [[500, 500, 100, 100]]), W, W)
+two  = L.windows(L.rect_mask(W, W, [[80, 80, 50, 50], [1000, 1000, 50, 50]]), W, W)
+near = L.windows(L.rect_mask(W, W, [[80, 80, 50, 50], [150, 80, 50, 50]]), W, W)
+all_ = L.windows(L.rect_mask(W, W, [[5, 5, 1190, 1190]]), W, W)
+print("one", len(one), one[0][2] < W // 3)
+print("two", len(two))
+print("near", len(near))
+print("all", len(all_), all_[0] == [0, 0, W, W])
+MK
+)
+has "a small hole gets a small window"   "$r" "one 1 True"
+has "far-apart holes get one window each" "$r" "two 2"
+has "holes close together merge"          "$r" "near 1"
+has "a hole covering it all is one frame" "$r" "all 1 True"
+
+make_png "$WORK/wide.png" 300 300 0
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/wide.png\",\"regions\":[[20,20,20,20],[250,250,20,20]],\"output_path\":\"$WORK/wide-out.png\"}}}" | tail -1)
+jhas "two holes are filled in two passes" "$r" "len(d['result']['structuredContent']['windows'])==2"
+jhas "and the window stays off full frame" "$r" "max(w[2] for w in d['result']['structuredContent']['windows'])<300"
+r=$(python3 -c "
+import sys; sys.path.insert(0,'$ROOT/mcp'); import imagelib as L
+w,h,c,px = L.read_png('$WORK/wide-out.png')
+a = tuple(px[(25*w+25)*c:(25*w+25)*c+3]); b = tuple(px[(255*w+255)*c:(255*w+255)*c+3])
+m = tuple(px[(150*w+150)*c:(150*w+150)*c+3])
+print('both' if a==(9,99,199) and b==(9,99,199) else 'missed', 'between-kept' if m!=(9,99,199) else 'clobbered')")
+has "both holes get filled"                "$r" "both"
+has "the gap between them is untouched"    "$r" "between-kept"
+
 unset IMAGEBRIDGE_INPAINT_URL
 r=$(IMAGEBRIDGE_CONFIG=/nonexistent rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\",\"regions\":[[1,1,4,4]]}}}" | tail -1)
 jhas "unconfigured says so, clearly"    "$r" "d['result'].get('isError') is True and 'no inpaint endpoint is configured' in d['result']['content'][0]['text']"

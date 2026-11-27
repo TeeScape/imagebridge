@@ -294,12 +294,23 @@ The contract is one POST, body `image/png`, response `image/png`: a 512×512 RGB
 **alpha 0 marks the hole**, answered with the filled RGB image. Any LaMa (Apache-2.0) or MI-GAN
 (MIT) server with that shape works; nothing proprietary is involved.
 
+It fills one **window per hole**, not the whole picture. The model only ever sees a 512 square,
+so handing it a 4000px photo renders the fill at an eighth of the picture's resolution and
+returns a soft patch in a sharp photograph. Cropping a window around each hole keeps the fill at
+full detail: a 120px hole in a 1254px image gets a 266px window, which the tile *upsamples*
+rather than shrinks. Measured on a synthetic 1254px texture, the fill carried four times the
+local detail of the old whole-image path (28.5 against 7.0, where the surrounding picture reads
+91.6). Holes close together share a window; a hole large enough to need the whole frame gets it.
+
 Two honest limits:
 
 - **It removes; it does not invent.** "Delete the person on the left" is what this is for.
   "Give him a hat" is not — that is `/imagebridge:edit`.
 - **The box must cover the whole object.** Clip an edge and you get a visible stub of it back.
   This is the usual cause of a disappointing result, not the model.
+- **It continues, it does not reproduce.** Neither path recovers a fine texture exactly — in the
+  measurement above the best result still reached only a third of the surrounding detail. On flat
+  or smooth areas that is invisible; on fine texture the fill reads as plausible, not identical.
 
 Everything outside the mask is left bit-for-bit alone: the fill is composed back through the
 mask, not pasted over the picture.

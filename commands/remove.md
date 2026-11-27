@@ -22,7 +22,11 @@ choice, not ours. If it is not configured, say so and point at the README sectio
 3. This model **removes**; it does not invent. "Delete the person on the left" works well.
    "Put a hat on him" is not something it can do — use `/imagebridge:edit` for that.
 
-4. The image is resampled to the model's 512×512 tile and composed back, so only the erased
-   region changes; every pixel outside the mask is bit-for-bit the original.
+4. Only a **window around each hole** goes to the model, not the whole picture, so removing
+   something small from a large photo does not soften it. Every pixel outside the mask is
+   bit-for-bit the original. The result reports the windows used — quote that rather than
+   guessing at quality.
 
-5. Show the result with `SendUserFile` and be honest about residue if you see any.
+5. Show the result with `SendUserFile`, then run `inspect_image` with `compare_to` set to the
+   original and quote the measurement. Be honest about residue — the usual cause is a box that
+   clipped the object, not the model.
