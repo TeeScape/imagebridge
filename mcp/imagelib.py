@@ -490,3 +490,75 @@ def windows(mask, width, height, tile=512, margin=0.6):
             if merged:
                 break
     return [[x0, y0, x1 - x0 + 1, y1 - y0 + 1] for x0, y0, x1, y1 in wins]
+
+
+SELECT_LIMIT = 0.4
+
+
+def select(pixels, width, height, channels, seeds, tolerance=40, grow=2):
+    """A mask (1 keep, 0 remove) of the areas a seed point sits in.
+
+    Drawing a rectangle round an object is the main reason object removal
+    disappoints: clip one edge and a stub of the thing comes back. Growing the
+    region out from a point inside it instead follows the object's actual
+    shape, so the hole is both tighter and complete.
+
+    `grow` dilates the result along its boundary. Without it an antialiased
+    edge survives as a faint halo of the removed object - a selection that
+    caught 98% of a leaf still left a visible green fringe.
+
+    Seed INSIDE the object, not on its edge: an edge pixel is a blend of the
+    object and its background, so it either selects almost nothing or bridges
+    into the background and swallows the picture. A selection past
+    SELECT_LIMIT of the image is treated as that mistake and refused.
+    """
+    keep = bytearray([1]) * (width * height)
+    frontier = set()
+    for seed in seeds:
+        sx, sy = (int(v) for v in seed)
+        if not (0 <= sx < width and 0 <= sy < height):
+            raise Unsupported("the point (%d, %d) is outside the %dx%d image"
+                              % (sx, sy, width, height))
+        start = sy * width + sx
+        sr, sg, sb = _rgb(pixels, start, channels)
+        limit = tolerance * 3
+        stack = [start]
+        keep[start] = 0
+        while stack:
+            i = stack.pop()
+            x, y = i % width, i // width
+            for j, ok in ((i - 1, x > 0), (i + 1, x < width - 1),
+                          (i - width, y > 0), (i + width, y < height - 1)):
+                if not ok or not keep[j]:
+                    continue
+                r, g, b = _rgb(pixels, j, channels)
+                if abs(r - sr) + abs(g - sg) + abs(b - sb) <= limit:
+                    keep[j] = 0
+                    stack.append(j)
+                else:
+                    frontier.add(j)
+
+    # Dilate along the boundary only; walking the whole image per step would
+    # cost as much as the fill itself.
+    for _ in range(max(0, int(grow))):
+        nxt = set()
+        for i in frontier:
+            if not keep[i]:
+                continue
+            keep[i] = 0
+            x, y = i % width, i // width
+            for j, ok in ((i - 1, x > 0), (i + 1, x < width - 1),
+                          (i - width, y > 0), (i + width, y < height - 1)):
+                if ok and keep[j]:
+                    nxt.add(j)
+        frontier = nxt
+
+    chosen = len(keep) - sum(keep)
+    if not chosen:
+        raise Unsupported("the point selected nothing")
+    if chosen > SELECT_LIMIT * width * height:
+        raise Unsupported(
+            "the selection spread over %.0f%% of the picture, which means it leaked out of the "
+            "object into the background. Seed a point well inside the thing to remove, not on "
+            "its edge, or lower the tolerance." % (100.0 * chosen / (width * height)))
+    return bytes(keep)

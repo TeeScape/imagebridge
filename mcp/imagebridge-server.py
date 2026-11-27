@@ -27,7 +27,7 @@ import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.10.1"
+SERVER_VERSION = "0.11.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -325,19 +325,29 @@ TOOLS = [
             "fills plausibly, so it cannot add something that was never there. Use edit_image when "
             "the request is to put something IN.\n\n"
             "Runs on a LaMa server that the user configures; it costs no API money. If no endpoint "
-            "is set the tool says so and does nothing. Give either `regions` (rectangles, easiest "
-            "to express) or `mask` (a PNG whose transparent areas mark what to remove)."
+            "is set the tool says so and does nothing.\n\n"
+            "Give exactly one of `points` (a point inside each object - PREFER THIS, it follows "
+            "the object's shape), `regions` (rectangles) or `mask` (a PNG whose transparent areas "
+            "mark what to remove). A rectangle that clips the object leaves a stub of it behind "
+            "and is the usual reason a removal looks bad; a point does not have that failure."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "image": {"type": "string", "description": "Path of the PNG to edit. The original is never modified."},
+                "image": {"type": "string", "description": "Path of the image to edit - PNG, or a JPEG this machine can convert. The original is never modified."},
                 "regions": {
                     "type": "array",
                     "items": {"type": "array", "items": {"type": "integer"}, "minItems": 4, "maxItems": 4},
                     "description": "Rectangles to erase, each [x, y, width, height] in pixels from the top-left. Prefer this: it is far easier to get right than a painted mask.",
                 },
                 "mask": {"type": "string", "description": "Alternative to regions: a PNG the same size as the image whose FULLY TRANSPARENT areas are removed."},
+                "points": {
+                    "type": "array",
+                    "items": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
+                    "description": "Alternative to regions: [x, y] points, one well INSIDE each thing to remove. The area is grown out from each point by colour, so it follows the object's real shape instead of a rectangle - usually a smaller hole AND a cleaner removal. Seed the middle of the object, never its edge: an edge pixel is a blend of object and background and will either select nothing or leak into the picture.",
+                },
+                "tolerance": {"type": "integer", "description": "With points: how different a neighbouring colour may be and still be taken, 0-255. Default 40. Lower it if the selection leaks."},
+                "grow": {"type": "integer", "description": "With points: pixels to expand the selection by, to swallow the object's antialiased edge. Default 2; raise it if a faint outline of the removed thing survives."},
                 "output_path": {"type": "string", "description": "Where to write the result. Defaults to <image>-removed.png next to the original."},
                 "return_image": {"type": "boolean", "description": "Also return a 384px preview so you can check the fill. Default false."},
                 "timeout_seconds": {"type": "integer", "description": "Give up after this long. Default 120."},
@@ -766,13 +776,20 @@ def tool_remove_object(args):
     image = args.get("image")
     if not image or not os.path.isfile(image):
         raise ValueError("image not found: %s" % image)
-    regions, mask_path = args.get("regions"), args.get("mask")
-    if bool(regions) == bool(mask_path):
-        raise ValueError("give exactly one of regions or mask")
+    regions, mask_path, points = args.get("regions"), args.get("mask"), args.get("points")
+    given = [bool(regions), bool(mask_path), bool(points)]
+    if sum(given) != 1:
+        raise ValueError("give exactly one of points, regions or mask")
 
     width, height, channels, pixels = read_image(image)
-    mask = (imagelib.mask_from_png(mask_path, width, height) if mask_path
-            else imagelib.rect_mask(width, height, regions))
+    if points:
+        mask = imagelib.select(pixels, width, height, channels, points,
+                               tolerance=int(args.get("tolerance") or 40),
+                               grow=2 if args.get("grow") is None else int(args.get("grow")))
+    elif mask_path:
+        mask = imagelib.mask_from_png(mask_path, width, height)
+    else:
+        mask = imagelib.rect_mask(width, height, regions)
 
     timeout = int(args.get("timeout_seconds") or 120)
     N = INPAINT_TILE

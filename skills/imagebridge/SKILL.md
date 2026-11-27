@@ -160,7 +160,13 @@ endpoint the **user** hosts and gets the filled image back. There is deliberatel
 If `IMAGEBRIDGE_INPAINT_URL` or `~/.imagebridge/config.json` is unset, the tool says so — point
 the user at the README's "Object removal (optional)" section; never invent an endpoint.
 
-Pass either `regions` (`[x, y, w, h]` boxes) or a `mask` PNG the size of the image. Cover the
+Prefer `points`: one `[x, y]` well inside each object. The area grows out from it by colour, so
+it follows the object's real shape — measured on one picture, a point left no trace of a leaf
+where a hand-drawn box left 501 pixels of it, using a hole half the size. Seed the middle, never
+the edge; an edge pixel is half background and either selects nothing or swallows the picture.
+`tolerance` (default 40) and `grow` (default 2, which eats the antialiased rim) tune it.
+
+Otherwise pass `regions` (`[x, y, w, h]` boxes) or a `mask` PNG the size of the image. Cover the
 **whole** object, shadow and thin parts included: a box that clips an edge leaves a stub behind,
 and that — not the model — is what usually makes a result look bad.
 

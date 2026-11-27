@@ -336,8 +336,15 @@ Two honest limits:
 
 - **It removes; it does not invent.** "Delete the person on the left" is what this is for.
   "Give him a hat" is not — that is `/imagebridge:edit`.
-- **The box must cover the whole object.** Clip an edge and you get a visible stub of it back.
-  This is the usual cause of a disappointing result, not the model.
+- **A box must cover the whole object.** Clip an edge and you get a visible stub of it back.
+  This was the usual cause of a disappointing result, which is why `points` exists: the area is
+  grown out from the point by colour, so it follows the object instead of a rectangle. On the
+  same picture, removing a leaf by hand-drawn box left 501 of its 8,063 pixels behind; the same
+  leaf by point left **none**, with a hole barely half the size (8,609 against 16,200). A smaller
+  hole is also an easier fill.
+  Seed the **middle** of the object, never its edge — an edge pixel is a blend of object and
+  background and will either select almost nothing or bridge into the picture and swallow it. A
+  selection covering more than 40% of the image is refused on exactly that suspicion.
 - **It continues, it does not reproduce.** Neither path recovers a fine texture exactly — in the
   measurement above the best result still reached only a third of the surrounding detail. On flat
   or smooth areas that is invisible; on fine texture the fill reads as plausible, not identical.

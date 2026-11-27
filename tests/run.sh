@@ -483,6 +483,26 @@ CFG
 r=$(IMAGEBRIDGE_CONFIG="$WORK/cfg.json" rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":26,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\",\"regions\":[[10,10,20,20]]}}}" | tail -1)
 jhas "a config that is not an object is ignored" "$r" "d['result'].get('isError') is not True"
 
+# Growing a region from a point, instead of drawing a box round it.
+box "$WORK/sel.png" 1040c0          # a 30x20 blue box at (20,10) on grey
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/sel.png\",\"points\":[[35,20]],\"grow\":0,\"output_path\":\"$WORK/sel-out.png\"}}}" | tail -1)
+jhas "a point selects the shape exactly" "$r" "d['result']['structuredContent']['removed_pixels']==600"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/sel.png\",\"points\":[[35,20]],\"grow\":2,\"output_path\":\"$WORK/sel-g.png\"}}}" | tail -1)
+jhas "grow swallows the antialiased edge" "$r" "d['result']['structuredContent']['removed_pixels']>600"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/sel.png\",\"points\":[[2,2]]}}}" | tail -1)
+jhas "a seed in the background is refused" "$r" "d['result'].get('isError') is True and 'leaked out of the object' in d['result']['content'][0]['text']"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":43,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/sel.png\",\"points\":[[900,900]]}}}" | tail -1)
+jhas "a point outside the image is refused" "$r" "d['result'].get('isError') is True and 'outside' in d['result']['content'][0]['text']"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":44,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/sel.png\",\"points\":[[35,20]],\"regions\":[[1,1,4,4]]}}}" | tail -1)
+jhas "points and regions together refused" "$r" "d['result'].get('isError') is True and 'exactly one' in d['result']['content'][0]['text']"
+r=$(python3 -c "
+import sys; sys.path.insert(0,'$ROOT/mcp'); import imagelib as L
+w,h,c,px = L.read_png('$WORK/sel-out.png')
+inside = tuple(px[(20*w+35)*c:(20*w+35)*c+3]); outside = tuple(px[(50*w+10)*c:(50*w+10)*c+3])
+print('filled' if inside==(9,99,199) else 'not-filled', 'kept' if outside!=(9,99,199) else 'clobbered')")
+has "the selected shape is filled"        "$r" "filled"
+has "the rest of the picture is kept"     "$r" "kept"
+
 # A JPEG, the format a photograph actually arrives in. Skipped where the
 # machine has no converter, because then there is nothing to test.
 if command -v sips >/dev/null 2>&1 || command -v ffmpeg >/dev/null 2>&1 || command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1; then
