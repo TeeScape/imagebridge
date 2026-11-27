@@ -111,11 +111,11 @@ if grep -q 'if \[ -s "\$RAW" \]' "$SCRIPTS/codex-image"; then
 else bad "the match list is tested before xargs runs"; fi
 
 # regression: on Linux an empty xargs used to list the CWD and copy a project file
-cd "$WORK" && : > innocent-project-file.txt
+cd "$WORK" || exit 1; : > innocent-project-file.txt
 out=$(STUB_MODE=silent bash "$SCRIPTS/codex-image" "x" -o "$WORK/c.png" 2>/dev/null); rc=$?
 [ "$rc" -ne 0 ] && ok "no output is fatal, not a fake success" || bad "no output is fatal" "exit 0 with [$out]"
 hasnt "never copies an unrelated project file" "$out" "innocent-project-file"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 # regression: -o said "exact path" but forked into -2, -3 ...
 STUB_MODE=ok bash "$SCRIPTS/codex-image" "x" -o "$WORK/same.png" >/dev/null 2>&1
