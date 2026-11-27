@@ -562,3 +562,88 @@ def select(pixels, width, height, channels, seeds, tolerance=40, grow=2):
             "object into the background. Seed a point well inside the thing to remove, not on "
             "its edge, or lower the tolerance." % (100.0 * chosen / (width * height)))
     return bytes(keep)
+
+
+def content_box(pixels, width, height, channels, tolerance=12):
+    """The rectangle holding everything that is not the flat border.
+
+    An image model asked for an icon returns a composition, not an icon: the
+    one measured while this was written was 512x341 with two thirds of the
+    frame empty white. The border colour is taken from the corners rather
+    than assumed to be white, and a fully transparent pixel counts as border
+    whatever is stored under it.
+    """
+    if channels in (2, 4):
+        edges = [i for i in range(width * height) if _alpha(pixels, i, channels) > 0]
+        if edges:
+            xs = [i % width for i in edges]
+            ys = [i // width for i in edges]
+            if len(edges) < width * height:
+                return [min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1]
+
+    corners = [0, width - 1, (height - 1) * width, height * width - 1]
+    ref = [sum(_rgb(pixels, i, channels)[k] for i in corners) // 4 for k in range(3)]
+    limit = tolerance * 3
+    x0, y0, x1, y1 = width, height, -1, -1
+    for i in range(width * height):
+        r, g, b = _rgb(pixels, i, channels)
+        if abs(r - ref[0]) + abs(g - ref[1]) + abs(b - ref[2]) > limit:
+            x, y = i % width, i // width
+            if x < x0:
+                x0 = x
+            if y < y0:
+                y0 = y
+            if x > x1:
+                x1 = x
+            if y > y1:
+                y1 = y
+    if x1 < 0:
+        raise Unsupported("the whole image is one flat colour, so there is nothing to trim to")
+    return [x0, y0, x1 - x0 + 1, y1 - y0 + 1]
+
+
+def fit_canvas(pixels, width, height, channels, box, out_w, out_h, mode="pad",
+               background=None, margin=0):
+    """Put `box` of the image onto an out_w x out_h canvas.
+
+    mode "pad" fits the whole thing inside and fills the rest with
+    `background`; mode "crop" fills the canvas and loses whatever falls
+    outside it. Neither invents detail: this is framing, and the caller is
+    expected to say so rather than imply the model produced this size.
+    """
+    bx, by, bw, bh = box
+    _, _, sub = crop(pixels, width, height, channels, box)
+    inner_w, inner_h = max(1, out_w - 2 * margin), max(1, out_h - 2 * margin)
+    sx, sy = inner_w / bw, inner_h / bh
+    scale = min(sx, sy) if mode == "pad" else max(sx, sy)
+    nw, nh = max(1, round(bw * scale)), max(1, round(bh * scale))
+    scaled = resize(sub, bw, bh, nw, nh, channels)
+
+    if background is None:
+        background = tuple(_rgb(pixels, 0, channels))
+    if background == "transparent":
+        if channels not in (2, 4):
+            channels_out = 4
+            scaled = b"".join(bytes(_rgb(scaled, i, channels)) + b"\xff" for i in range(nw * nh))
+        else:
+            channels_out = channels
+        fill = bytes(channels_out)
+    else:
+        channels_out = channels
+        px = list(background)[:3]
+        fill = bytes(px[:1] if channels_out <= 2 else px) + (b"\xff" if channels_out in (2, 4) else b"")
+
+    canvas = bytearray(fill * (out_w * out_h))
+    ox, oy = (out_w - nw) // 2, (out_h - nh) // 2
+    for y in range(nh):
+        ty = oy + y
+        if not (0 <= ty < out_h):
+            continue
+        for x in range(nw):
+            tx = ox + x
+            if not (0 <= tx < out_w):
+                continue
+            s = (y * nw + x) * channels_out
+            d = (ty * out_w + tx) * channels_out
+            canvas[d:d + channels_out] = scaled[s:s + channels_out]
+    return out_w, out_h, channels_out, bytes(canvas), round(scale, 4)

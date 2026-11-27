@@ -179,6 +179,15 @@ near each other share a window, so cost is one request per cluster, not per rect
 It **removes**; it does not invent. "Delete the car" yes; "add a car" no, that is an edit.
 Pixels outside the mask are bit-for-bit unchanged, because the fill is composed through the mask.
 
+## An exact file size, for free
+
+`fit_image` trims the flat border off an image and centres what is left on a canvas of exactly
+the size asked for. Local, instant, no quota. Reach for it before `openai-image`: a generated
+icon measured 512×341 with two thirds empty border, and this made it a 512×512 icon.
+
+Tell the user it is framing, not generation. `mode: "crop"` discards the edges; `background` takes
+`transparent` or `#rrggbb`; `trim: false` changes only the canvas.
+
 ## Exact image dimensions
 
 `openai-image` wraps `openai images generate` (the official Go CLI). It needs `OPENAI_API_KEY` and

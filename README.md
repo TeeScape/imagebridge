@@ -35,6 +35,7 @@ Claude: [runs codex-image] → assets/folder.png
 | `/imagebridge:exact` | `openai images generate` | yes | images needing an exact size, quality or count |
 | `/imagebridge:edit` | Codex `$imagegen` + `referenced_image_paths` | **no** | changing part of an image and keeping the rest |
 | `/imagebridge:remove` | your own inpainting endpoint | **no** (self-hosted) | deleting an object and filling the gap |
+| `/imagebridge:fit` | pure arithmetic, locally | **no** | trimming and reframing to an exact size |
 | `/imagebridge:inspect` | pure arithmetic, locally | **no** | checking an edit did what was asked |
 | `/imagebridge:doctor` | — | — | check your setup |
 
@@ -51,6 +52,7 @@ The plugin also ships an **MCP server**, so Claude gets real typed tools instead
 | `edit_image` | prompt, `images[]`, optional `from_last`; `provider` defaults to the **free** Codex path → returns the edited path |
 | `ask_codex` | prompt, optional `cwd` / `allow_writes` / `images` / `stdin_text` → returns Codex's answer |
 | `remove_object` | `image`, and **either** `regions` (`[x, y, w, h]` boxes) **or** a `mask` PNG where alpha 0 is the hole → returns the filled path. Off until you configure an endpoint |
+| `fit_image` | `image`, `width`, optional `height` / `mode` / `trim` / `background` / `margin` → an image of exactly that size, border trimmed |
 | `inspect_image` | `image`, optional `compare_to` / `tolerance` → size, transparency, dominant colours, and for a pair: pixels changed, the box they landed in, silhouette IoU |
 | `check_setup` | reports what is installed, signed in and missing |
 
@@ -236,11 +238,18 @@ N images of the Codex conversation when they have no file on disk.
 
 | | why | where |
 |---|---|---|
-| an exact output size | Codex's image tool has no size argument | `/imagebridge:exact` |
+| the model composing at a given size | Codex's image tool has no size argument | `/imagebridge:exact` |
 | a pixel mask | no mask argument either | `edit_image` with `provider: "api"` |
 
 Both bill the OpenAI API per call and need `OPENAI_API_KEY`. Everything else — editing,
 transparency, references, GIFs — is free.
+
+For a *file* of an exact size, you usually do not need either. `fit_image` trims and reframes
+locally, for nothing: asked for an icon, the free path returned 512×341 with 66% of the frame
+empty white, and `fit_image` turned that into a centred 512×512 in milliseconds. It is framing
+rather than generation — the model did not compose at that size — which for an icon on a plain
+background is a distinction without a difference, and for a photograph is not. Only when the
+model itself must compose to a shape is the paid path the answer.
 
 On the paid path the mask rule is the opposite of most people's instinct: the **fully
 transparent** areas are the ones that get **edited**, and the mask must be a PNG with an alpha

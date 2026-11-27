@@ -27,7 +27,7 @@ import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.12.1"
+SERVER_VERSION = "0.13.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -377,6 +377,36 @@ TOOLS = [
                 "tolerance": {"type": "integer", "description": "How far a channel may move before it counts as changed, 0-255. Default 8, which ignores re-encoding noise."},
             },
             "required": ["image"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "fit_image",
+        "title": "Trim and reframe an image to an exact size",
+        "description": (
+            "Put an image on a canvas of exactly the size you need. Free, local and instant.\n\n"
+            "Ask the free path for an icon and it returns a composition: the one measured while "
+            "this was written came back 512x341 with two thirds of the frame empty white. This "
+            "trims the flat border away and centres what is left on the canvas you asked for.\n\n"
+            "Be straight with the user about what this is: framing, not generation. The model did "
+            "not compose at this size. For an icon or a logo on a plain background that is exactly "
+            "right; for a photograph whose composition matters, mode 'crop' throws away the edges, "
+            "so say which you used."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "image": {"type": "string", "description": "Path of the image to reframe. The original is never modified."},
+                "width": {"type": "integer", "description": "Canvas width in pixels."},
+                "height": {"type": "integer", "description": "Canvas height in pixels. Defaults to width, i.e. a square."},
+                "mode": {"type": "string", "enum": ["pad", "crop"], "description": "pad (default): fit it all in and fill the rest with the background. crop: fill the canvas and lose what hangs over the edge."},
+                "trim": {"type": "boolean", "description": "Cut the flat border off first. Default true, which is what makes a loose composition into a tight icon."},
+                "background": {"type": "string", "description": "'auto' (default: the colour already at the border), 'transparent', or a #rrggbb colour."},
+                "margin": {"type": "integer", "description": "Blank pixels to leave around the content. Default 0."},
+                "output_path": {"type": "string", "description": "Where to write it. Defaults to <image>-fitted.png."},
+                "return_image": {"type": "boolean", "description": "Also return a 384px preview. Default false."},
+            },
+            "required": ["image", "width"],
             "additionalProperties": False,
         },
     },
@@ -897,6 +927,61 @@ def tool_inspect_image(args):
             "structuredContent": info}
 
 
+def tool_fit_image(args):
+    if imagelib is None:
+        raise RuntimeError("imagelib is unavailable (%s), so this cannot run" % _IMAGELIB_ERROR)
+    image = args.get("image")
+    if not image or not os.path.isfile(image):
+        raise ValueError("image not found: %s" % image)
+    out_w = int(args.get("width") or 0)
+    out_h = int(args.get("height") or out_w)
+    if out_w < 1 or out_h < 1:
+        raise ValueError("width and height must be at least 1 pixel")
+    mode = args.get("mode") or "pad"
+    if mode not in ("pad", "crop"):
+        raise ValueError("mode must be 'pad' or 'crop'")
+
+    width, height, channels, pixels = read_image(image)
+    trim = True if args.get("trim") is None else bool(args.get("trim"))
+    box = imagelib.content_box(pixels, width, height, channels) if trim else [0, 0, width, height]
+
+    bg = (args.get("background") or "auto").strip().lower()
+    if bg == "auto":
+        background = None
+    elif bg == "transparent":
+        background = "transparent"
+    elif bg.startswith("#") and len(bg) == 7:
+        background = tuple(int(bg[i:i + 2], 16) for i in (1, 3, 5))
+    else:
+        raise ValueError("background must be 'auto', 'transparent' or #rrggbb, not %r" % bg)
+
+    ow, oh, oc, px, scale = imagelib.fit_canvas(
+        pixels, width, height, channels, box, out_w, out_h, mode,
+        background=background, margin=max(0, int(args.get("margin") or 0)))
+
+    out_path = args.get("output_path") or (os.path.splitext(image)[0] + "-fitted.png")
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    imagelib.write_png(out_path, ow, oh, oc, px)
+
+    previews, notes = _image_blocks([out_path], args.get("return_image"))
+    emptied = 1 - (box[2] * box[3]) / float(width * height)
+    text = ("%dx%d -> %dx%d.\n%s  (%s)\n"
+            "%sContent scaled %.3gx and centred, mode '%s'.\n\n"
+            "This is framing, not generation: the model did not compose at this size. Say so."
+            % (width, height, ow, oh, out_path, _describe(out_path),
+               ("Trimmed a flat border that was %.0f%% of the frame, down to %dx%d. "
+                % (emptied * 100, box[2], box[3])) if trim else "",
+               scale, mode))
+    if notes:
+        text += "\n" + "\n".join("- " + n for n in notes)
+    return {"content": [{"type": "text", "text": text}] + previews
+            + [{"type": "resource_link", "uri": "file://" + out_path,
+                "name": os.path.basename(out_path), "description": "Reframed",
+                "mimeType": "image/png"}],
+            "structuredContent": {"path": out_path, "width": ow, "height": oh,
+                                  "content_box": box, "scale": scale, "mode": mode}}
+
+
 def tool_check_setup(_args):
     def probe(cmd):
         try:
@@ -939,6 +1024,7 @@ HANDLERS = {
     "remove_object": tool_remove_object,
     "ask_codex": tool_ask_codex,
     "inspect_image": tool_inspect_image,
+    "fit_image": tool_fit_image,
     "check_setup": tool_check_setup,
 }
 

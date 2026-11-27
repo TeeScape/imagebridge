@@ -409,6 +409,30 @@ r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"tools/call\",\"para
 jhas "alpha is detected"                 "$r" "d['result']['structuredContent']['has_alpha'] is True"
 
 echo
+echo "fit_image (framing, offline, no model)"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"tools/call\",\"params\":{\"name\":\"fit_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"width\":100,\"output_path\":\"$WORK/fit.png\"}}}" | tail -1)
+jhas "it finds the content and drops the border" "$r" "d['result']['structuredContent']['content_box']==[20,10,30,20]"
+jhas "the canvas is exactly what was asked"      "$r" "d['result']['structuredContent']['width']==100 and d['result']['structuredContent']['height']==100"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":51,\"method\":\"tools/call\",\"params\":{\"name\":\"fit_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"width\":40,\"height\":80,\"trim\":false,\"output_path\":\"$WORK/fit-notrim.png\"}}}" | tail -1)
+jhas "trim:false keeps the whole frame"          "$r" "d['result']['structuredContent']['content_box']==[0,0,64,64]"
+jhas "and a non-square canvas is honoured"       "$r" "[d['result']['structuredContent']['width'],d['result']['structuredContent']['height']]==[40,80]"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":52,\"method\":\"tools/call\",\"params\":{\"name\":\"fit_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"width\":50,\"background\":\"transparent\",\"output_path\":\"$WORK/fit-tr.png\"}}}" | tail -1)
+jhas "transparent padding is accepted"           "$r" "d['result'].get('isError') is not True"
+r=$(python3 -c "
+import sys; sys.path.insert(0,'$ROOT/mcp'); import imagelib as L
+w,h,c,px = L.read_png('$WORK/fit-tr.png')
+print('rgba' if c==4 else 'opaque', 'clear' if L._alpha(px,0,c)==0 else 'filled')")
+has "it gains an alpha channel"                  "$r" "rgba"
+has "and the padding really is clear"            "$r" "clear"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":53,\"method\":\"tools/call\",\"params\":{\"name\":\"fit_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"width\":64,\"background\":\"blue\"}}}" | tail -1)
+jhas "a colour name is refused, hex is not"      "$r" "d['result'].get('isError') is True and 'rrggbb' in d['result']['content'][0]['text']"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":54,\"method\":\"tools/call\",\"params\":{\"name\":\"fit_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"width\":0}}}" | tail -1)
+jhas "a zero canvas is refused"                  "$r" "d['result'].get('isError') is True"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":55,\"method\":\"tools/call\",\"params\":{\"name\":\"fit_image\",\"arguments\":{\"image\":\"$WORK/flat.png\",\"width\":64}}}" | tail -1)
+jhas "a blank image says there is nothing to trim" "$r" "d['result'].get('isError') is True and 'nothing to trim' in d['result']['content'][0]['text']"
+[ -f "$WORK/boxed.png" ] && ok "the original is left alone" || bad "the original is left alone"
+
+echo
 echo "remove_object (stub inpaint server; no network, no model)"
 # A stand-in for the LaMa endpoint: answers any POST with a solid 512 PNG, so
 # the whole path - mask, downscale, HTTP, compose - runs without a model.
