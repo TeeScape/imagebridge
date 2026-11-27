@@ -495,9 +495,13 @@ if command -v sips >/dev/null 2>&1 || command -v ffmpeg >/dev/null 2>&1 || comma
   jhas "a JPEG can be measured"           "$r" "d['result']['structuredContent']['width']==64"
   r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":28,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.jpg\",\"regions\":[[10,10,20,20]],\"output_path\":\"$WORK/jpg-out.png\"}}}" | tail -1)
   jhas "and an object removed from it"    "$r" "d['result']['structuredContent']['path'].endswith('jpg-out.png')"
+  PYDIR=$(dirname "$(command -v python3)")
+  r=$(printf '%s\n%s\n' "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/scene.jpg\"}}}" | env PATH="$PYDIR" python3 "$ROOT/mcp/imagebridge-server.py" 2>/dev/null | tail -1)
+  jhas "with no converter it says what to install" "$r" "d['result'].get('isError') is True and 'no image converter is installed' in d['result']['content'][0]['text']"
 else
   ok "a JPEG can be measured (skipped: no converter here)"
   ok "and an object removed from it (skipped: no converter here)"
+  ok "with no converter it says what to install (skipped: no converter here)"
 fi
 
 # A 16-bit PNG hits the same decoder wall as a JPEG and takes the same route out.
@@ -512,16 +516,10 @@ open(sys.argv[1] + "/deep.png", "wb").write(
     + ch(b"IHDR", struct.pack(">IIBBBBB", w, h, 16, 2, 0, 0, 0))
     + ch(b"IDAT", zlib.compress(raw)) + ch(b"IEND", b""))
 MK
-if command -v sips >/dev/null 2>&1 || command -v ffmpeg >/dev/null 2>&1; then
+if true; then
   r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":29,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/deep.png\"}}}" | tail -1)
-  jhas "a 16-bit PNG is converted too"    "$r" "d['result']['structuredContent']['width']==8"
-else
-  ok "a 16-bit PNG is converted too (skipped: no converter here)"
+  jhas "a 16-bit PNG is read directly"    "$r" "d['result']['structuredContent']['width']==8"
 fi
-
-PYDIR=$(dirname "$(command -v python3)")
-r=$(printf '%s\n%s\n' "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/deep.png\"}}}" | env PATH="$PYDIR" python3 "$ROOT/mcp/imagebridge-server.py" 2>/dev/null | tail -1)
-jhas "with no converter it says what to install" "$r" "d['result'].get('isError') is True and 'no image converter is installed' in d['result']['content'][0]['text']"
 
 unset IMAGEBRIDGE_INPAINT_URL
 r=$(IMAGEBRIDGE_CONFIG=/nonexistent rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\",\"regions\":[[1,1,4,4]]}}}" | tail -1)

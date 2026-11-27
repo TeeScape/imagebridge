@@ -132,8 +132,9 @@ paid path without saying it costs money and why the free one cannot do it.
 
 ## Photographs, and other formats
 
-`inspect_image` and `remove_object` take JPEGs, 16-bit PNGs and interlaced PNGs, by converting
-with `sips`, `magick`, `convert` or `ffmpeg` — whichever is already installed. Do not ask the
+`inspect_image` and `remove_object` read 8-bit and 16-bit PNG directly, and take JPEGs and
+interlaced PNGs by converting with `sips`, `magick`, `convert` or `ffmpeg` — whichever is already
+installed. Do not ask the
 user to convert a file by hand. If none is installed the error names them; relay that.
 
 Results are written as PNG even when the input was a JPEG, so the picture is not compressed a

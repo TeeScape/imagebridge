@@ -259,10 +259,12 @@ openai-edit: the mask must have the same dimensions as the image.
 zlib and arithmetic with no dependency behind it. But the picture someone wants an object removed
 from is usually a photograph, which is a JPEG, and the answer "not a PNG" is not an answer.
 
-So anything that is not a readable PNG is converted first, using a tool that is already on the
-machine — `sips` (built into macOS), `magick`, `convert` or `ffmpeg`, tried in that order. The
-same route rescues 16-bit and interlaced PNGs. Nothing is added to your Python, and if none of
-those is installed the error names them instead of saying "not a PNG":
+A 16-bit PNG is a PNG, so that one is now decoded directly — the high byte of each sample, since
+everything downstream is 8-bit anyway. Anything genuinely foreign, a JPEG above all, is converted
+first using a tool that is already on the machine: `sips` (built into macOS), `magick`, `convert`
+or `ffmpeg`, tried in that order, each result read back before it is trusted. Nothing is added to
+your Python, and if none of those is installed the error names them instead of saying
+"not a PNG":
 
 ```
 cannot read holiday.jpg - not a PNG.

@@ -27,8 +27,14 @@ class Unsupported(Exception):
     """The file is a PNG this module deliberately does not handle."""
 
 
-def _unfilter(raw, width, height, channels):
-    """Undo the per-scanline filters. See PNG spec §9.2."""
+def _unfilter(raw, width, height, channels, sample=1):
+    """Undo the per-scanline filters. See PNG spec §9.2.
+
+    `sample` is bytes per sample: 2 for a 16-bit image. Filtering works on the
+    byte before the corresponding byte of the previous pixel, so the only thing
+    that changes is how far back that is.
+    """
+    channels = channels * sample
     stride = width * channels
     out = bytearray(stride * height)
     prev = bytearray(stride)
@@ -82,8 +88,8 @@ def read_png_bytes(blob):
         if ctype == b"IHDR":
             width, height = struct.unpack(">II", data[:8])
             depth, colour, _, _, interlace = data[8], data[9], data[10], data[11], data[12]
-            if depth != 8:
-                raise Unsupported("bit depth %d (only 8 is handled)" % depth)
+            if depth not in (8, 16):
+                raise Unsupported("bit depth %d (only 8 and 16 are handled)" % depth)
             if interlace:
                 raise Unsupported("interlaced PNG")
             if colour not in CHANNELS:
@@ -96,7 +102,14 @@ def read_png_bytes(blob):
         pos += 12 + length
     if width is None or not idat:
         raise Unsupported("no image data")
-    return width, height, channels, _unfilter(zlib.decompress(bytes(idat)), width, height, channels)
+    sample = depth // 8
+    px = _unfilter(zlib.decompress(bytes(idat)), width, height, channels, sample)
+    if sample == 2:
+        # Keep the high byte of each sample. Everything downstream - the
+        # resampler, the mask, the comparison - is 8-bit, and a 16-bit source is
+        # worth reading rather than refusing over precision nobody asked for.
+        px = px[::2]
+    return width, height, channels, px
 
 
 def resize(src, sw, sh, dw, dh, channels):
