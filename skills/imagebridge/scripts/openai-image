@@ -32,8 +32,10 @@ fi
 
 if [ -z "${OPENAI_API_KEY:-}" ] && [ -f "$ENVFILE" ]; then
   # The file is chosen at runtime, so shellcheck cannot follow it.
-  # shellcheck source=/dev/null
-  set -a; . "$ENVFILE"; set +a
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENVFILE"
+  set +a
 fi
 
 if [ -z "${OPENAI_API_KEY:-}" ]; then

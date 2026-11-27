@@ -76,6 +76,16 @@ for f in "$SCRIPTS"/*; do
 done
 if python3 -c "import ast;ast.parse(open('$ROOT/mcp/imagebridge-server.py').read())" 2>/dev/null; then
   ok "python parses the MCP server"; else bad "python parses the MCP server"; fi
+# Same invocation CI uses, so a contributor never learns about it from a red build.
+if command -v shellcheck >/dev/null 2>&1; then
+  if shellcheck -S warning "$SCRIPTS"/* "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
+    ok "shellcheck -S warning"
+  else
+    bad "shellcheck -S warning" "$(shellcheck -S warning "$SCRIPTS"/* "${BASH_SOURCE[0]}" 2>&1 | head -4)"
+  fi
+else
+  printf '  \033[33mskip\033[0m shellcheck (not installed; CI runs it)\n'
+fi
 
 make_stub
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ib-work.XXXXXXXX")
