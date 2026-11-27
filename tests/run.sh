@@ -200,7 +200,8 @@ hasnt "a Thai description keeps its words" "$out" "codex-image.png"
 make_png "$WORK/src.png" 64 64 0
 out=$(bash "$SCRIPTS/codex-image" "make it green" -r "$WORK/src.png" --dry-run 2>&1)
 has   "an edit names the file for referenced_image_paths" "$out" "referenced_image_paths"
-haspath "an edit passes the absolute path"                "$out" "$WORK/src.png"
+src_abs="$(cd -P "$WORK" && pwd)/src.png"
+haspath "an edit passes the absolute path"                "$out" "$src_abs"
 hasnt "an edit does not attach with -i"                   "$out" " -i "
 out=$(bash "$SCRIPTS/codex-image" "x" --from-last 3 --dry-run 2>&1)
 has   "--from-last drives num_last_images_to_include"     "$out" "num_last_images_to_include"

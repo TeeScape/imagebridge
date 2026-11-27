@@ -138,7 +138,9 @@ if [ ${#REFS[@]} -gt 0 ]; then
   LIST=""
   for f in "${REFS[@]}"; do
     [ -f "$f" ] || { echo "codex-image: reference image not found: $f" >&2; exit 1; }
-    abs=$(cd "$(dirname "$f")" && pwd)/$(basename "$f")
+    # -P so the path is physical: on macOS /var/folders is a symlink to
+    # /private/var/folders, and `cd` alone reports whichever form it was given.
+    abs=$(cd -P "$(dirname "$f")" && pwd)/$(basename "$f")
     LIST="$LIST
 $abs"
   done
