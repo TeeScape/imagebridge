@@ -99,8 +99,11 @@ Then check it:
 <details>
 <summary>Without the plugin system</summary>
 
-Clone it and run `./install.sh` — that links the three scripts into `~/bin` and the skill into
-`~/.claude/skills/`, so they work as plain CLI tools and as a personal skill.
+Clone it and run `./install.sh` — that links the scripts into `~/bin`, the skill into
+`~/.claude/skills/`, and registers the MCP server, so they work as plain CLI tools, as a personal
+skill, and as the tools (`inspect_image`, `remove_object`, `fit_image`) that need no Codex at
+all. If the `claude` CLI is not on your PATH it prints the one command to run yourself rather
+than skipping the server in silence.
 
 </details>
 
@@ -402,6 +405,7 @@ skills/imagebridge/ SKILL.md and the bash scripts it drives
 mcp/                the zero-dependency MCP server, and imagelib's PNG arithmetic
 inpaint-server/     optional: a LaMa endpoint to run yourself (onnxruntime + numpy)
 tests/              the stub-codex suite
+CHANGELOG.md        every released version, generated from the commits
 .github/workflows/  CI on Linux and macOS
 assets/             logo, icon, social preview
 ```

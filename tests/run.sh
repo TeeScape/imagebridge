@@ -409,6 +409,20 @@ r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"tools/call\",\"para
 jhas "alpha is detected"                 "$r" "d['result']['structuredContent']['has_alpha'] is True"
 
 echo
+echo "install.sh (standalone install, into a throwaway HOME)"
+FAKE=$(mktemp -d "${TMPDIR:-/tmp}/ib-home.XXXXXX")
+# No claude on PATH: the script must still link everything and SAY that the
+# MCP server - where three of the six tools live - was not registered.
+r=$(cd "$ROOT" && env HOME="$FAKE" PATH="$(dirname "$(command -v python3)"):/usr/bin:/bin" bash install.sh 2>&1)
+[ -L "$FAKE/bin/codex-image" ] && ok "it links the scripts into ~/bin" || bad "it links the scripts into ~/bin"
+[ -L "$FAKE/.claude/skills/imagebridge" ] && ok "and the skill into ~/.claude/skills" || bad "and the skill into ~/.claude/skills"
+has "it names the MCP server when it cannot register it" "$r" "claude mcp add imagebridge"
+has "and says what is missing without it"                "$r" "inspect_image"
+(cd "$ROOT" && env HOME="$FAKE" PATH="$(dirname "$(command -v python3)"):/usr/bin:/bin" bash install.sh >/dev/null 2>&1)
+[ -L "$FAKE/bin/codex-image" ] && ok "running it twice is safe" || bad "running it twice is safe"
+rm -rf "$FAKE"
+
+echo
 echo "fit_image (framing, offline, no model)"
 r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"tools/call\",\"params\":{\"name\":\"fit_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"width\":100,\"output_path\":\"$WORK/fit.png\"}}}" | tail -1)
 jhas "it finds the content and drops the border" "$r" "d['result']['structuredContent']['content_box']==[20,10,30,20]"
