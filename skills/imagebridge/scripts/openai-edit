@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# openai-edit — edit or extend an existing image with `openai images edit`.
+#
+# This is the one thing generation cannot do: change part of an image and keep
+# the rest. It needs OPENAI_API_KEY and bills per call, so everything that can
+# be checked locally is checked BEFORE the request goes out — a mask of the
+# wrong size or with no transparency is a paid request that edits nothing.
+#
+#   openai-edit "make the sky purple" --image photo.png -o out/purple.png
+#   openai-edit "replace the logo" --image a.png --mask m.png -o out/b.png
+#
+# Mask rule, from the API: the FULLY TRANSPARENT areas of the mask are the
+# areas that get edited. It must be a PNG with an alpha channel, the same
+# width and height as the first --image.
+
+set -uo pipefail
+
+usage() {
+  cat <<'USAGE'
+openai-edit [options] "<what to change>"
+
+Required
+  -i, --image FILE      source image (png/webp/jpg). Repeatable, up to 16.
+
+Options
+  -m, --mask FILE       PNG whose TRANSPARENT areas mark what to edit.
+                        Must match the first image's dimensions exactly.
+  -o, --out FILE        where to write the result
+  -d, --dir DIR         directory to write into (default: .)
+      --size SIZE       e.g. 1024x1024, or auto
+      --quality Q       low | medium | high | xhigh | max | auto
+      --background B    transparent | opaque | auto
+      --fidelity F      high | low  (omit for gpt-image-2)
+      --model MODEL     gpt-image-2.6-sunburst (default), gpt-image-2, ...
+      --format FMT      output format: png | webp | jpeg
+      --dry-run         print the exact openai command and exit
+  -h, --help            this help
+
+Checked before any paid request is made: every image exists and is a supported
+type, at most 16 of them, the mask is a PNG, the mask has an alpha channel, and
+the mask's dimensions match the first image.
+USAGE
+}
+
+PROMPT=""; OUT=""; DIR=""; MASK=""; SIZE=""; QUALITY=""; BACKGROUND=""
+FIDELITY=""; MODEL=""; FORMAT=""; DRY_RUN=0; IMAGES=()
+POSITIONAL=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -i|--image)   IMAGES+=("${2:?--image needs a value}"); shift 2 ;;
+    -m|--mask)    MASK="${2:?--mask needs a value}"; shift 2 ;;
+    -o|--out)     OUT="${2:?--out needs a value}"; shift 2 ;;
+    -d|--dir)     DIR="${2:?--dir needs a value}"; shift 2 ;;
+    --size)       SIZE="${2:?--size needs a value}"; shift 2 ;;
+    --quality)    QUALITY="${2:?--quality needs a value}"; shift 2 ;;
+    --background) BACKGROUND="${2:?--background needs a value}"; shift 2 ;;
+    --fidelity)   FIDELITY="${2:?--fidelity needs a value}"; shift 2 ;;
+    --model)      MODEL="${2:?--model needs a value}"; shift 2 ;;
+    --format)     FORMAT="${2:?--format needs a value}"; shift 2 ;;
+    --dry-run)    DRY_RUN=1; shift ;;
+    -h|--help)    usage; exit 0 ;;
+    --)           shift; while [ $# -gt 0 ]; do POSITIONAL+=("$1"); shift; done ;;
+    -*)           echo "openai-edit: unknown option: $1" >&2; exit 2 ;;
+    *)            POSITIONAL+=("$1"); shift ;;
+  esac
+done
+set -- ${POSITIONAL+"${POSITIONAL[@]}"}
+PROMPT="${1:-}"
+if [ -z "$PROMPT" ]; then usage >&2; exit 2; fi
+if [ $# -gt 1 ]; then
+  echo "openai-edit: got $# separate arguments; quote the whole text as one argument." >&2
+  exit 2
+fi
+if [ ${#IMAGES[@]} -eq 0 ]; then
+  echo "openai-edit: at least one --image is required" >&2; exit 2
+fi
+if [ ${#IMAGES[@]} -gt 16 ]; then
+  echo "openai-edit: the API accepts at most 16 images, got ${#IMAGES[@]}" >&2; exit 2
+fi
+
+# --- PNG header reading with od, so the script stays dependency-free ---------
+png_wh() {   # prints "WIDTH HEIGHT" or nothing
+  od -An -tu1 -j16 -N8 -- "$1" 2>/dev/null | awk '
+    NF==8 { printf "%d %d\n", $1*16777216+$2*65536+$3*256+$4, $5*16777216+$6*65536+$7*256+$8 }'
+}
+png_colour_type() { od -An -tu1 -j25 -N1 -- "$1" 2>/dev/null | tr -d ' \n'; }
+is_png() { [ "$(od -An -tx1 -N4 -- "$1" 2>/dev/null | tr -d ' \n')" = "89504e47" ]; }
+
+for f in "${IMAGES[@]}"; do
+  [ -f "$f" ] || { echo "openai-edit: image not found: $f" >&2; exit 1; }
+  case "$(printf '%s' "${f##*.}" | tr '[:upper:]' '[:lower:]')" in
+    png|webp|jpg|jpeg) ;;
+    *) echo "openai-edit: $f is not png/webp/jpg — the API will reject it" >&2; exit 1 ;;
+  esac
+done
+
+if [ -n "$MASK" ]; then
+  [ -f "$MASK" ] || { echo "openai-edit: mask not found: $MASK" >&2; exit 1; }
+  if ! is_png "$MASK"; then
+    echo "openai-edit: the mask must be a PNG; $MASK is not" >&2; exit 1
+  fi
+  ct=$(png_colour_type "$MASK")
+  if [ "$ct" != "4" ] && [ "$ct" != "6" ]; then
+    echo "openai-edit: the mask has no alpha channel (PNG colour type $ct)." >&2
+    echo "             The API edits where the mask is TRANSPARENT, so a mask without" >&2
+    echo "             transparency would change nothing and still be billed." >&2
+    exit 1
+  fi
+  first="${IMAGES[0]}"
+  if is_png "$first"; then
+    mwh=$(png_wh "$MASK"); iwh=$(png_wh "$first")
+    if [ -n "$mwh" ] && [ -n "$iwh" ] && [ "$mwh" != "$iwh" ]; then
+      echo "openai-edit: the mask must have the same dimensions as the image." >&2
+      echo "             image ${first}: ${iwh// /x}" >&2
+      echo "             mask  ${MASK}: ${mwh// /x}" >&2
+      exit 1
+    fi
+  fi
+fi
+
+# --- credentials -------------------------------------------------------------
+SRC="${BASH_SOURCE[0]}"
+while [ -L "$SRC" ]; do
+  LDIR=$(cd -P "$(dirname "$SRC")" && pwd)
+  SRC=$(readlink "$SRC")
+  case "$SRC" in /*) ;; *) SRC="$LDIR/$SRC" ;; esac
+done
+SELF=$(cd -P "$(dirname "$SRC")/../../.." && pwd)
+ENVFILE="${OPENAI_CLI_ENV:-$SELF/.env}"
+if [ -z "${OPENAI_API_KEY:-}" ] && [ -f "$ENVFILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENVFILE"
+  set +a
+fi
+if [ -z "${OPENAI_API_KEY:-}" ] && [ "$DRY_RUN" -eq 0 ]; then
+  cat >&2 <<MSG
+openai-edit: OPENAI_API_KEY is not set.
+  Editing an image is only available through the OpenAI API, so unlike
+  codex-image this path needs a key and bills per call.
+  Export it, or write it into $ENVFILE
+MSG
+  exit 1
+fi
+command -v openai >/dev/null 2>&1 || {
+  echo "openai-edit: 'openai' not found. Install: brew install openai/tools/openai" >&2; exit 127; }
+
+# --- destination -------------------------------------------------------------
+if [ -n "$OUT" ]; then
+  mkdir -p "$(dirname "$OUT")" || exit 1
+  DEST_DIR=$(cd "$(dirname "$OUT")" && pwd)
+  NAME=$(basename "$OUT")
+else
+  DIR="${DIR:-.}"; mkdir -p "$DIR" || exit 1
+  DEST_DIR=$(cd "$DIR" && pwd)
+  NAME=""
+fi
+
+ARGS=(images edit --prompt "$PROMPT" --output-dir "$DEST_DIR")
+for f in "${IMAGES[@]}"; do ARGS+=(--image "$f"); done
+[ -n "$MASK" ]       && ARGS+=(--mask "$MASK")
+[ -n "$NAME" ]       && ARGS+=(--name "$NAME")
+[ -n "$SIZE" ]       && ARGS+=(--size "$SIZE")
+[ -n "$QUALITY" ]    && ARGS+=(--quality "$QUALITY")
+[ -n "$BACKGROUND" ] && ARGS+=(--background "$BACKGROUND")
+[ -n "$FIDELITY" ]   && ARGS+=(--input-fidelity "$FIDELITY")
+[ -n "$MODEL" ]      && ARGS+=(--model "$MODEL")
+[ -n "$FORMAT" ]     && ARGS+=(--output-format "$FORMAT")
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  printf 'openai'
+  for a in "${ARGS[@]}"; do printf ' %q' "$a"; done
+  printf '\n'
+  exit 0
+fi
+
+# Normalise the output to "one absolute path per line", like codex-image, so a
+# caller can capture it. If the CLI prints something else, pass it through
+# unchanged rather than inventing a path.
+TMPOUT=$(mktemp "${TMPDIR:-/tmp}/openai-edit.XXXXXXXX") || exit 1
+trap 'rm -f "$TMPOUT"' EXIT
+openai "${ARGS[@]}" >"$TMPOUT" 2>&1
+RC=$?
+if [ "$RC" -ne 0 ]; then
+  cat "$TMPOUT" >&2
+  exit "$RC"
+fi
+FOUND=0
+while IFS= read -r line; do
+  cand=$(printf '%s' "$line" | sed -e 's/^[^/]*//' -e 's/[[:space:]]*$//')
+  if [ -n "$cand" ] && [ -f "$cand" ]; then printf '%s\n' "$cand"; FOUND=1; fi
+done <"$TMPOUT"
+if [ "$FOUND" -eq 0 ]; then cat "$TMPOUT"; fi
+exit 0

@@ -106,6 +106,20 @@ bash "$SCRIPTS/codex-ask" --resume "now fix what you found"
 Codex does not share this conversation. Write it a self-contained brief; it starts cold in the
 directory you give it. Relay its answer rather than pasting it whole, and say it came from Codex.
 
+## Editing an existing image
+
+```bash
+bash "$SCRIPTS/openai-edit" "make the sky purple" -i photo.png -o out/purple.png
+bash "$SCRIPTS/openai-edit" "replace the logo" -i a.png -m mask.png -o out/b.png
+```
+
+Needs `OPENAI_API_KEY` and bills per call. **The mask's fully transparent areas are the parts
+that get edited**, and it must be a PNG with alpha and the same dimensions as the image — the
+script checks that locally and refuses for free, so relay its reason instead of guessing.
+
+Before reaching for this, consider `codex-image "..." -r original.png`: a free variation on the
+ChatGPT plan. Only a surgical change to part of an image needs the paid edit path.
+
 ## Exact image dimensions
 
 `openai-image` wraps `openai images generate` (the official Go CLI). It needs `OPENAI_API_KEY` and

@@ -33,6 +33,7 @@ Claude: [runs codex-image] → assets/folder.png
 | `/imagebridge:draw` | Codex `$imagegen` (gpt-image-2 class) | **no** | icons, illustrations, mockups, placeholder art |
 | `/imagebridge:ask` | `codex exec` | **no** | second opinion on a diff, delegated coding tasks, reading screenshots |
 | `/imagebridge:exact` | `openai images generate` | yes | images needing an exact size, quality or count |
+| `/imagebridge:edit` | `openai images edit` | yes | changing part of an image and keeping the rest |
 | `/imagebridge:doctor` | — | — | check your setup |
 
 Plus a **skill** that fires on its own: say *"make me an icon for this"* or *"ask Codex what it thinks
@@ -45,6 +46,7 @@ The plugin also ships an **MCP server**, so Claude gets real typed tools instead
 | tool | does |
 |---|---|
 | `generate_image` | prompt, optional `output_path` / `output_dir` / `reference_images` / `transparent` → returns the saved path |
+| `edit_image` | prompt, `images[]`, optional `mask` / `size` / `quality` / `background` → returns the edited path |
 | `ask_codex` | prompt, optional `cwd` / `allow_writes` / `images` / `stdin_text` → returns Codex's answer |
 | `check_setup` | reports what is installed, signed in and missing |
 
@@ -183,16 +185,39 @@ PATH, which would let the skill call `codex-image` as a bare command instead of
 If you want the commands on your PATH anyway, `./install.sh` symlinks them into `~/bin`, which
 keeps that choice with the user instead of baking it into the plugin.
 
+## Editing, and the mask rule that catches everyone
+
+`edit_image` changes part of an image and leaves the rest alone. A `--mask` confines the edit, and
+the rule is the opposite of most people's instinct:
+
+> the **fully transparent** areas of the mask are the areas that get **edited**
+
+The mask must also be a PNG with an alpha channel and exactly the same dimensions as the image.
+Get any of that wrong and the API still bills you for a request that changed nothing, so
+`openai-edit` checks all of it locally and refuses before sending anything:
+
+```
+openai-edit: the mask must have the same dimensions as the image.
+             image src.png: 64x64
+             mask  mask.png: 96x96
+```
+
+Editing needs `OPENAI_API_KEY`. If you only want a variation rather than a surgical edit,
+`codex-image "..." -r original.png` is free and usually the better first try.
+
 ## Tests
 
 ```bash
 ./tests/run.sh
 ```
 
-31 checks against a **stub codex**, so the suite costs nothing, needs no network and no ChatGPT
+48 checks against a **stub codex** and a **stub `openai` CLI**, so the suite costs nothing, needs no network and no ChatGPT
 quota. Every check exists because a real bug got past its absence: a failed generation reported as
 a success, `-o` quietly forking into `-2`, `-3`, a Thai description collapsing to a generic
 filename, a JSON-RPC array killing the server.
+
+The edit path is covered by a stub too, so the mask rules are tested without a paid call. The
+live API call itself is the one thing the suite cannot exercise — see the note in `edit.md`.
 
 CI runs it on **ubuntu-latest as well as macos-latest**, which is not optional: three of the bugs
 it guards against are GNU-vs-BSD differences that a macOS-only run cannot see.

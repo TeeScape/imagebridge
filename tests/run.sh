@@ -43,17 +43,17 @@ esac
 # case where a success-looking path used to be returned for a failed run.
 sess="$CODEX_HOME/generated_images/stub-$$"
 mkdir -p "$sess"
-python3 - "$sess/exec-stub.${STUB_EXT:-png}" <<'PY'
+python3 - "$sess/exec-stub.${STUB_EXT:-png}" 4 4 0 <<'PY'
 import sys, struct, zlib
-w = h = 4
-raw = b''.join(b'\x00' + b'\xff\x00\x00' * w for _ in range(h))
-def chunk(t, d):
+path = sys.argv[1]
+w = int(sys.argv[2]); h = int(sys.argv[3]); alpha = sys.argv[4] == '1'
+px = bytes([0, 0, 0, 255]) if alpha else bytes([0, 0, 0])
+raw = b''.join(bytes([0]) + px * w for _ in range(h))
+def ch(t, d):
     return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
-png = (b'\x89PNG\r\n\x1a\n'
-       + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
-       + chunk(b'IDAT', zlib.compress(raw))
-       + chunk(b'IEND', b''))
-open(sys.argv[1], 'wb').write(png)
+magic = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+ihdr = struct.pack('>IIBBBBB', w, h, 8, 6 if alpha else 2, 0, 0, 0)
+open(path, 'wb').write(magic + ch(b'IHDR', ihdr) + ch(b'IDAT', zlib.compress(raw)) + ch(b'IEND', b''))
 PY
 echo "$sess/exec-stub.${STUB_EXT:-png}"
 if [ "${STUB_MODE:-ok}" = "fail_with_image" ]; then
@@ -65,6 +65,55 @@ STUB
   chmod +x "$STUB_DIR/codex"
   export PATH="$STUB_DIR:$PATH"
 }
+make_openai_stub() {
+  cat > "$STUB_DIR/openai" <<'OSTUB'
+#!/usr/bin/env bash
+# Minimal stand-in for `openai images edit`: writes a file where it was told to
+# and prints the path, so the whole edit path can be tested without a paid call.
+out=""; name="edited.png"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --output-dir) out="$2"; shift 2 ;;
+    --name) name="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -z "$out" ] && out="."
+mkdir -p "$out"
+case "$name" in *.*) ;; *) name="$name.png" ;; esac
+python3 - "$out/$name" 8 8 0 <<'PYP'
+import sys, struct, zlib
+path = sys.argv[1]
+w = int(sys.argv[2]); h = int(sys.argv[3]); alpha = sys.argv[4] == '1'
+px = bytes([0, 0, 0, 255]) if alpha else bytes([0, 0, 0])
+raw = b''.join(bytes([0]) + px * w for _ in range(h))
+def ch(t, d):
+    return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+magic = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+ihdr = struct.pack('>IIBBBBB', w, h, 8, 6 if alpha else 2, 0, 0, 0)
+open(path, 'wb').write(magic + ch(b'IHDR', ihdr) + ch(b'IDAT', zlib.compress(raw)) + ch(b'IEND', b''))
+PYP
+echo "Saved image to: $out/$name"
+exit 0
+OSTUB
+  chmod +x "$STUB_DIR/openai"
+}
+
+make_png() { # path width height alpha(0|1)
+  python3 - "$1" "$2" "$3" "$4" <<'PYP'
+import sys, struct, zlib
+path = sys.argv[1]
+w = int(sys.argv[2]); h = int(sys.argv[3]); alpha = sys.argv[4] == '1'
+px = bytes([0, 0, 0, 255]) if alpha else bytes([0, 0, 0])
+raw = b''.join(bytes([0]) + px * w for _ in range(h))
+def ch(t, d):
+    return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+magic = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+ihdr = struct.pack('>IIBBBBB', w, h, 8, 6 if alpha else 2, 0, 0, 0)
+open(path, 'wb').write(magic + ch(b'IHDR', ihdr) + ch(b'IDAT', zlib.compress(raw)) + ch(b'IEND', b''))
+PYP
+}
+
 cleanup() { [ -n "${STUB_DIR:-}" ] && rm -rf "$STUB_DIR"; [ -n "${WORK:-}" ] && rm -rf "$WORK"; }
 trap cleanup EXIT
 
@@ -145,6 +194,40 @@ out=$(STUB_MODE=ok bash "$SCRIPTS/codex-image" "ไอคอนโฟลเด�
 hasnt "a Thai description keeps its words" "$out" "codex-image.png"
 
 echo
+echo "openai-edit (stubbed; no paid call, no key)"
+make_openai_stub
+make_png "$WORK/src.png"      64 64 0
+make_png "$WORK/mask-ok.png"  64 64 1
+make_png "$WORK/mask-big.png" 96 96 1
+make_png "$WORK/mask-noa.png" 64 64 0
+printf 'not a png' > "$WORK/notpng.png"
+
+rej() { # name, expected-substring, args...
+  local n="$1" want="$2"; shift 2
+  local o; o=$(bash "$SCRIPTS/openai-edit" "$@" 2>&1); local rc=$?
+  if [ "$rc" -eq 0 ]; then bad "$n" "accepted, should have been rejected"
+  else case "$o" in *"$want"*) ok "$n";; *) bad "$n" "wrong reason: $(printf '%s' "$o" | head -1)";; esac; fi
+}
+rej "a missing image is rejected"        "image not found"       "x" -i "$WORK/nope.png" --dry-run
+rej "a mask that is not a PNG"           "must be a PNG"         "x" -i "$WORK/src.png" -m "$WORK/notpng.png" --dry-run
+rej "a mask with no alpha channel"       "no alpha channel"      "x" -i "$WORK/src.png" -m "$WORK/mask-noa.png" --dry-run
+rej "a mask of the wrong dimensions"     "same dimensions"       "x" -i "$WORK/src.png" -m "$WORK/mask-big.png" --dry-run
+many=(); for _ in $(seq 17); do many+=(-i "$WORK/src.png"); done
+rej "more than 16 images"                "at most 16"            "x" "${many[@]}" --dry-run
+
+out=$(bash "$SCRIPTS/openai-edit" "make it blue" -i "$WORK/src.png" -m "$WORK/mask-ok.png" --dry-run 2>&1); rc=$?
+is  "a valid mask is accepted" "$rc" "0"
+has "the dry run passes --mask through" "$out" "--mask"
+has "the dry run passes the prompt"     "$out" "make"
+
+out=$(OPENAI_API_KEY=test-key bash "$SCRIPTS/openai-edit" "make it blue" \
+        -i "$WORK/src.png" -m "$WORK/mask-ok.png" -o "$WORK/edited.png" 2>/dev/null); rc=$?
+is "a stubbed edit exits 0" "$rc" "0"
+samepath "a stubbed edit prints the path it wrote" "$out" "$WORK/edited.png"
+[ -f "$WORK/edited.png" ] && ok "the edited file exists" || bad "the edited file exists"
+[ -f "$WORK/src.png" ] && ok "the original is kept" || bad "the original is kept"
+
+echo
 echo "MCP server"
 rpc() {
   printf '%s\n' "$@" | python3 "$ROOT/mcp/imagebridge-server.py" 2>/dev/null
@@ -163,6 +246,13 @@ jhas "malformed JSON is a parse error" "$r" "d['error']['code']==-32700"
 # regression: a JSON array used to kill the process and lose the rest of the session
 r=$(rpc "$INIT" '[1,2,3]' '{"jsonrpc":"2.0","id":9,"method":"ping"}' | tail -1)
 jhas "an array does not kill the server" "$r" "d['id']==9" 
+r=$(rpc "$INIT" '{"jsonrpc":"2.0","id":7,"method":"tools/list"}' | tail -1)
+jhas "tools/list now offers edit_image" "$r" "'edit_image' in [t['name'] for t in d['result']['tools']]"
+r=$(rpc "$INIT" '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"edit_image","arguments":{"prompt":"x"}}}' | tail -1)
+jhas "edit_image without images is isError" "$r" "d['result'].get('isError') is True"
+r=$(OPENAI_API_KEY=test-key rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"edit_image\",\"arguments\":{\"prompt\":\"make it blue\",\"images\":[\"$WORK/src.png\"],\"mask\":\"$WORK/mask-ok.png\",\"output_path\":\"$WORK/mcp-edited.png\"}}}" | tail -1)
+jhas "edit_image returns a path through MCP" "$r" "d['result']['structuredContent']['paths']"
+
 r=$(rpc "$INIT" '{"jsonrpc":"2.0","method":"notifications/initialized"}' '{"jsonrpc":"2.0","id":8,"method":"ping"}')
 is "a notification gets no reply" "$(printf '%s' "$r" | grep -c '"id"')" "2"
 

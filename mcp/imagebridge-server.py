@@ -22,7 +22,7 @@ import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -200,6 +200,42 @@ TOOLS = [
         },
     },
     {
+        "name": "edit_image",
+        "title": "Edit part of an existing image",
+        "description": (
+            "Change part of an image and keep the rest — the one thing generation cannot do. "
+            "Give the source image and what to change; add a mask to confine the edit, where the "
+            "mask's FULLY TRANSPARENT areas are the parts that get edited and it must be a PNG of "
+            "exactly the same dimensions as the image. Unlike generate_image this goes through the "
+            "OpenAI API, so it needs OPENAI_API_KEY and bills per call; say so before using it. "
+            "Every local check (files exist, mask is a PNG, has an alpha channel, matches the "
+            "image's size) runs before the request, so a mistake costs nothing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "What should change about the image."},
+                "images": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Source image path(s), png/webp/jpg, at most 16. The first is the one a mask applies to.",
+                },
+                "mask": {
+                    "type": "string",
+                    "description": "PNG whose transparent areas mark what to edit. Same dimensions as the first image.",
+                },
+                "output_path": {"type": "string", "description": "Exact file path to write."},
+                "output_dir": {"type": "string", "description": "Directory to write into. Default: current directory."},
+                "size": {"type": "string", "description": "e.g. '1024x1024', or 'auto'."},
+                "quality": {"type": "string", "description": "low | medium | high | xhigh | max | auto"},
+                "background": {"type": "string", "description": "transparent | opaque | auto"},
+                "model": {"type": "string", "description": "Image model; defaults to the CLI's own default."},
+                "timeout_seconds": {"type": "integer", "description": "Give up after this long. Default 300."},
+            },
+            "required": ["prompt", "images"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "check_setup",
         "title": "Check the ImageBridge prerequisites",
         "description": (
@@ -320,6 +356,56 @@ def tool_ask_codex(args):
     return {"content": [{"type": "text", "text": answer}]}
 
 
+def tool_edit_image(args):
+    prompt = args.get("prompt")
+    images = args.get("images") or []
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("prompt is required and must be a non-empty string")
+    if not isinstance(images, list) or not images:
+        raise ValueError("images is required and must be a non-empty array of paths")
+
+    cli = []
+    for img in images:
+        cli += ["-i", str(img)]
+    if args.get("mask"):
+        cli += ["-m", str(args["mask"])]
+    if args.get("output_path"):
+        cli += ["-o", str(args["output_path"])]
+    elif args.get("output_dir"):
+        cli += ["-d", str(args["output_dir"])]
+    for flag, key in (("--size", "size"), ("--quality", "quality"),
+                      ("--background", "background"), ("--model", "model")):
+        if args.get(key):
+            cli += [flag, str(args[key])]
+    cli += ["--", prompt]
+
+    timeout = int(args.get("timeout_seconds") or IMAGE_TIMEOUT_DEFAULT)
+    proc = run_script("openai-edit", cli, timeout)
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError("openai-edit failed (exit %s).\n%s" % (proc.returncode, detail[-1500:]))
+
+    paths = [l.strip() for l in proc.stdout.splitlines() if l.strip() and os.path.isfile(l.strip())]
+    if not paths:
+        raise RuntimeError("openai-edit produced no file.\n%s"
+                           % (proc.stdout or proc.stderr or "")[-1500:])
+
+    lines, blocks = [], []
+    for path in paths:
+        size = png_size(path)
+        lines.append("%s  (%s, %d bytes)" % (
+            path, ("%dx%d" % size) if size else "size unknown", os.path.getsize(path)))
+        blocks.append({"type": "resource_link", "uri": "file://" + path,
+                       "name": os.path.basename(path), "description": "Edited image",
+                       "mimeType": MIME_BY_EXT.get(os.path.splitext(path)[1].lower(),
+                                                   "application/octet-stream")})
+    return {"content": [{"type": "text", "text":
+            "Edited %d image%s (billed to the OpenAI API):\n%s\n\nThe original was kept."
+            % (len(paths), "" if len(paths) == 1 else "s", "\n".join(lines))}] + blocks,
+            "structuredContent": {"paths": paths}}
+
+
 def tool_check_setup(_args):
     def probe(cmd):
         try:
@@ -352,6 +438,7 @@ def tool_check_setup(_args):
 
 HANDLERS = {
     "generate_image": tool_generate_image,
+    "edit_image": tool_edit_image,
     "ask_codex": tool_ask_codex,
     "check_setup": tool_check_setup,
 }
