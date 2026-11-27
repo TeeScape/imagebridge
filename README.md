@@ -34,6 +34,7 @@ Claude: [runs codex-image] → assets/folder.png
 | `/imagebridge:ask` | `codex exec` | **no** | second opinion on a diff, delegated coding tasks, reading screenshots |
 | `/imagebridge:exact` | `openai images generate` | yes | images needing an exact size, quality or count |
 | `/imagebridge:edit` | Codex `$imagegen` + `referenced_image_paths` | **no** | changing part of an image and keeping the rest |
+| `/imagebridge:remove` | your own inpainting endpoint | **no** (self-hosted) | deleting an object and filling the gap |
 | `/imagebridge:doctor` | — | — | check your setup |
 
 Plus a **skill** that fires on its own: say *"make me an icon for this"* or *"ask Codex what it thinks
@@ -48,6 +49,7 @@ The plugin also ships an **MCP server**, so Claude gets real typed tools instead
 | `generate_image` | prompt, optional `output_path` / `output_dir` / `reference_images` / `transparent` / `return_image` / `max_dimension` → returns the saved path |
 | `edit_image` | prompt, `images[]`, optional `from_last`; `provider` defaults to the **free** Codex path → returns the edited path |
 | `ask_codex` | prompt, optional `cwd` / `allow_writes` / `images` / `stdin_text` → returns Codex's answer |
+| `remove_object` | `image`, and **either** `regions` (`[x, y, w, h]` boxes) **or** a `mask` PNG where alpha 0 is the hole → returns the filled path. Off until you configure an endpoint |
 | `check_setup` | reports what is installed, signed in and missing |
 
 It is **one Python file with no dependencies** — stdlib only, nothing to `pip install`. It needs
@@ -248,6 +250,38 @@ openai-edit: the mask must have the same dimensions as the image.
              image src.png: 64x64
              mask  mask.png: 96x96
 ```
+
+## Object removal (optional)
+
+`remove_object` erases something from a photo and fills the hole plausibly. It is the one tool
+here that does **not** run on the ChatGPT plan: it posts a 512×512 RGBA PNG to an inpainting
+endpoint and gets one back. ImageBridge deliberately ships **no default URL** — whose machine
+does that work is your choice, not ours — so the tool refuses until you point it somewhere:
+
+```bash
+export IMAGEBRIDGE_INPAINT_URL=https://inpaint.example.com/api/inpaint
+```
+
+or, so it persists:
+
+```json
+// ~/.imagebridge/config.json
+{ "inpaint_url": "https://inpaint.example.com/api/inpaint" }
+```
+
+The contract is one POST, body `image/png`, response `image/png`: a 512×512 RGBA image in which
+**alpha 0 marks the hole**, answered with the filled RGB image. Any LaMa (Apache-2.0) or MI-GAN
+(MIT) server with that shape works; nothing proprietary is involved.
+
+Two honest limits:
+
+- **It removes; it does not invent.** "Delete the person on the left" is what this is for.
+  "Give him a hat" is not — that is `/imagebridge:edit`.
+- **The box must cover the whole object.** Clip an edge and you get a visible stub of it back.
+  This is the usual cause of a disappointing result, not the model.
+
+Everything outside the mask is left bit-for-bit alone: the fill is composed back through the
+mask, not pasted over the picture.
 
 ## Tests
 

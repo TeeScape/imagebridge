@@ -67,7 +67,11 @@ def _unfilter(raw, width, height, channels):
 def read_png(path):
     """-> (width, height, channels, pixel bytes). Raises Unsupported."""
     with open(path, "rb") as fh:
-        blob = fh.read()
+        return read_png_bytes(fh.read())
+
+
+def read_png_bytes(blob):
+    """Same, for a PNG already in memory (an HTTP response, say)."""
     if blob[:8] != MAGIC:
         raise Unsupported("not a PNG")
     pos, idat, width, height, channels = 8, bytearray(), None, None, None
@@ -186,3 +190,87 @@ def preview_base64(path, max_side=512):
     if (nw, nh) != (w, h):
         px = resize(px, w, h, nw, nh, ch)
     return base64.b64encode(write_png(None, nw, nh, ch, px)).decode("ascii"), nw, nh
+
+
+# --------------------------------------------------------------------- masks
+
+def rect_mask(width, height, regions):
+    """A keep/remove map: 1 = keep, 0 = remove. regions are [x, y, w, h]."""
+    mask = bytearray([1]) * (width * height)
+    for r in regions:
+        x, y, w, h = (int(v) for v in r)
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(width, x + w), min(height, y + h)
+        if x1 <= x0 or y1 <= y0:
+            raise Unsupported("region %r falls outside the %dx%d image" % (r, width, height))
+        for yy in range(y0, y1):
+            row = yy * width
+            for xx in range(x0, x1):
+                mask[row + xx] = 0
+    if 0 not in mask:
+        raise Unsupported("the regions cover nothing")
+    return bytes(mask)
+
+
+def mask_from_png(path, width, height):
+    """1 = keep, 0 = remove, taken from a PNG's transparent areas.
+
+    Same convention as the OpenAI edit endpoint: FULLY TRANSPARENT means edit.
+    """
+    mw, mh, mch, mpx = read_png(path)
+    if (mw, mh) != (width, height):
+        raise Unsupported("the mask is %dx%d but the image is %dx%d" % (mw, mh, width, height))
+    if mch not in (2, 4):
+        raise Unsupported("the mask has no alpha channel (it marks the area to edit)")
+    alpha_at = mch - 1
+    mask = bytearray(width * height)
+    for i in range(width * height):
+        mask[i] = 0 if mpx[i * mch + alpha_at] < 128 else 1
+    if 0 not in mask:
+        raise Unsupported("the mask is fully opaque, so it marks nothing to edit")
+    return bytes(mask)
+
+
+def to_rgba_with_hole(pixels, width, height, channels, mask):
+    """RGBA where the holes are transparent black — the shape the LaMa API wants."""
+    out = bytearray(width * height * 4)
+    for i in range(width * height):
+        keep = mask[i]
+        src = i * channels
+        if channels >= 3:
+            r, g, b = pixels[src], pixels[src + 1], pixels[src + 2]
+        else:
+            r = g = b = pixels[src]
+        o = i * 4
+        out[o] = r if keep else 0
+        out[o + 1] = g if keep else 0
+        out[o + 2] = b if keep else 0
+        out[o + 3] = 255 if keep else 0
+    return bytes(out)
+
+
+def compose(filled, fw, fh, original, width, height, channels, mask):
+    """Keep the original everywhere the mask kept, take the fill in the holes.
+
+    A port of analogue's lamaCompose: the model returns a whole square, but only
+    what was inside the hole may be used, or the untouched part of the picture
+    would come back softened by a round trip through 512x512.
+    """
+    up = resize(filled, fw, fh, width, height, 3) if (fw, fh) != (width, height) else filled
+    out = bytearray(width * height * channels)
+    for i in range(width * height):
+        o, s = i * channels, i * 3
+        if mask[i]:
+            src = i * channels
+            for c in range(channels):
+                out[o + c] = original[src + c]
+        else:
+            if channels >= 3:
+                out[o], out[o + 1], out[o + 2] = up[s], up[s + 1], up[s + 2]
+                if channels == 4:
+                    out[o + 3] = 255
+            else:
+                out[o] = up[s]
+                if channels == 2:
+                    out[o + 1] = 255
+    return bytes(out)

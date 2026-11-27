@@ -346,5 +346,62 @@ r=$(rpc "$INIT" '{"jsonrpc":"2.0","method":"notifications/initialized"}' '{"json
 is "a notification gets no reply" "$(printf '%s' "$r" | grep -c '"id"')" "2"
 
 echo
+echo
+echo "remove_object (stub inpaint server; no network, no model)"
+# A stand-in for the LaMa endpoint: answers any POST with a solid 512 PNG, so
+# the whole path - mask, downscale, HTTP, compose - runs without a model.
+cat > "$WORK/stub_inpaint.py" <<'SRV'
+import struct, zlib, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+def png(n=512):
+    raw = b''.join(bytes([0]) + bytes([9, 99, 199]) * n for _ in range(n))
+    def ch(t, d):
+        return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+    return (bytes([137, 80, 78, 71, 13, 10, 26, 10])
+            + ch(b'IHDR', struct.pack('>IIBBBBB', n, n, 8, 2, 0, 0, 0))
+            + ch(b'IDAT', zlib.compress(raw)) + ch(b'IEND', b''))
+BODY = png()
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get('Content-Length', 0)))
+        self.send_response(200); self.send_header('Content-Type', 'image/png')
+        self.send_header('Content-Length', str(len(BODY))); self.end_headers()
+        self.wfile.write(BODY)
+    def log_message(self, *a): pass
+HTTPServer(('127.0.0.1', int(sys.argv[1])), H).serve_forever()
+SRV
+PORT=8731
+python3 "$WORK/stub_inpaint.py" "$PORT" & STUB_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  python3 -c "import socket,sys; s=socket.socket(); sys.exit(0 if s.connect_ex(('127.0.0.1',$PORT))==0 else 1)" 2>/dev/null && break
+  python3 -c "import time; time.sleep(.25)"
+done
+make_png "$WORK/scene.png" 64 64 0
+export IMAGEBRIDGE_INPAINT_URL="http://127.0.0.1:$PORT/"
+
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\",\"regions\":[[10,10,20,20]],\"output_path\":\"$WORK/scene-out.png\"}}}" | tail -1)
+jhas "remove_object writes a file"      "$r" "d['result']['structuredContent']['path'].endswith('scene-out.png')"
+jhas "it reports the pixels removed"    "$r" "d['result']['structuredContent']['removed_pixels']==400"
+[ -f "$WORK/scene-out.png" ] && ok "the output exists" || bad "the output exists"
+[ -f "$WORK/scene.png" ] && ok "the original is untouched" || bad "the original is untouched"
+r=$(python3 -c "
+import sys; sys.path.insert(0,'$ROOT/mcp'); import imagelib as L
+w,h,c,px = L.read_png('$WORK/scene-out.png')
+inside  = px[(20*w+20)*c:(20*w+20)*c+3]
+outside = px[(60*w+60)*c:(60*w+60)*c+3]
+print('fill' if tuple(inside)==(9,99,199) else 'not-filled', 'kept' if tuple(outside)!=(9,99,199) else 'overwritten')" 2>&1)
+has "the hole takes the server's fill"  "$r" "fill"
+has "outside the hole is left alone"    "$r" "kept"
+
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\"}}}" | tail -1)
+jhas "needs regions or a mask"          "$r" "d['result'].get('isError') is True and 'exactly one' in d['result']['content'][0]['text']"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\",\"regions\":[[900,900,10,10]]}}}" | tail -1)
+jhas "a region outside the image fails" "$r" "d['result'].get('isError') is True"
+
+unset IMAGEBRIDGE_INPAINT_URL
+r=$(IMAGEBRIDGE_CONFIG=/nonexistent rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\",\"regions\":[[1,1,4,4]]}}}" | tail -1)
+jhas "unconfigured says so, clearly"    "$r" "d['result'].get('isError') is True and 'no inpaint endpoint is configured' in d['result']['content'][0]['text']"
+kill "$STUB_PID" 2>/dev/null; wait "$STUB_PID" 2>/dev/null || true
+
 printf 'passed %d, failed %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

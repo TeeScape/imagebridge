@@ -130,6 +130,21 @@ file on disk. The two cannot be combined.
 mask (`openai-edit`). Transparency, references and GIFs are all free. Never send the user to the
 paid path without saying it costs money and why the free one cannot do it.
 
+## Removing an object — self-hosted, off by default
+
+The `remove_object` MCP tool erases something and fills the gap. It is the only tool here that
+does not use the ChatGPT plan: it POSTs a 512×512 RGBA PNG (alpha 0 = hole) to an inpainting
+endpoint the **user** hosts and gets the filled image back. There is deliberately no default URL.
+If `IMAGEBRIDGE_INPAINT_URL` or `~/.imagebridge/config.json` is unset, the tool says so — point
+the user at the README's "Object removal (optional)" section; never invent an endpoint.
+
+Pass either `regions` (`[x, y, w, h]` boxes) or a `mask` PNG the size of the image. Cover the
+**whole** object, shadow and thin parts included: a box that clips an edge leaves a stub behind,
+and that — not the model — is what usually makes a result look bad.
+
+It **removes**; it does not invent. "Delete the car" yes; "add a car" no, that is an edit.
+Pixels outside the mask are bit-for-bit unchanged, because the fill is composed through the mask.
+
 ## Exact image dimensions
 
 `openai-image` wraps `openai images generate` (the official Go CLI). It needs `OPENAI_API_KEY` and

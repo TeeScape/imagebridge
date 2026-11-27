@@ -18,11 +18,13 @@ import json
 import os
 import signal
 import struct
+import urllib.error
+import urllib.request
 import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.6.0"
+SERVER_VERSION = "0.7.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -38,6 +40,27 @@ except Exception as _exc:     # a preview is a nicety; never let it break a gene
     _IMAGELIB_ERROR = str(_exc)
 PLUGIN_ROOT = os.path.dirname(HERE)
 SCRIPT_DIR = os.path.join(PLUGIN_ROOT, "skills", "imagebridge", "scripts")
+
+INPAINT_TILE = 512
+CONFIG_PATH = os.environ.get("IMAGEBRIDGE_CONFIG") or os.path.expanduser("~/.imagebridge/config.json")
+
+
+def inpaint_url():
+    """The LaMa endpoint, if the user has pointed us at one.
+
+    Off unless configured, and never a built-in default: object removal needs a
+    server running a model, and which one that is belongs to whoever installed
+    this, not to the plugin.
+    """
+    env = os.environ.get("IMAGEBRIDGE_INPAINT_URL")
+    if env:
+        return env.strip()
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
+            return (json.load(fh).get("inpaint_url") or "").strip() or None
+    except Exception:
+        return None
+
 
 MIME_BY_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".webp": "image/webp", ".gif": "image/gif"}
@@ -264,6 +287,36 @@ TOOLS = [
                 "timeout_seconds": {"type": "integer", "description": "Give up after this long. Default 300."},
             },
             "required": ["prompt", "images"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "remove_object",
+        "title": "Remove something from a photo and fill the gap",
+        "description": (
+            "Erase part of an image and let the surroundings close over it — a person out of a "
+            "street, a sign off a wall, a blemish. This is NOT generative editing: it removes and "
+            "fills plausibly, so it cannot add something that was never there. Use edit_image when "
+            "the request is to put something IN.\n\n"
+            "Runs on a LaMa server that the user configures; it costs no API money. If no endpoint "
+            "is set the tool says so and does nothing. Give either `regions` (rectangles, easiest "
+            "to express) or `mask` (a PNG whose transparent areas mark what to remove)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "image": {"type": "string", "description": "Path of the PNG to edit. The original is never modified."},
+                "regions": {
+                    "type": "array",
+                    "items": {"type": "array", "items": {"type": "integer"}, "minItems": 4, "maxItems": 4},
+                    "description": "Rectangles to erase, each [x, y, width, height] in pixels from the top-left. Prefer this: it is far easier to get right than a painted mask.",
+                },
+                "mask": {"type": "string", "description": "Alternative to regions: a PNG the same size as the image whose FULLY TRANSPARENT areas are removed."},
+                "output_path": {"type": "string", "description": "Where to write the result. Defaults to <image>-removed.png next to the original."},
+                "return_image": {"type": "boolean", "description": "Also return a 384px preview so you can check the fill. Default false."},
+                "timeout_seconds": {"type": "integer", "description": "Give up after this long. Default 120."},
+            },
+            "required": ["image"],
             "additionalProperties": False,
         },
     },
@@ -555,6 +608,92 @@ def tool_edit_image(args):
             "structuredContent": {"paths": paths, "provider": "api"}}
 
 
+def tool_remove_object(args):
+    if imagelib is None:
+        raise RuntimeError("imagelib is unavailable (%s), so this cannot run" % _IMAGELIB_ERROR)
+    url = inpaint_url()
+    if not url:
+        raise RuntimeError(
+            "no inpaint endpoint is configured, so object removal is off.\n"
+            "Point IMAGEBRIDGE_INPAINT_URL, or inpaint_url in %s, at a LaMa server that takes a "
+            "512x512 RGBA PNG (alpha 0 marks the hole) and returns a 512x512 PNG. The plugin ships "
+            "no default: whose server does the work is the user's choice, not ours.\n"
+            "Tell the user this rather than silently falling back to the billed edit path."
+            % CONFIG_PATH)
+
+    image = args.get("image")
+    if not image or not os.path.isfile(image):
+        raise ValueError("image not found: %s" % image)
+    regions, mask_path = args.get("regions"), args.get("mask")
+    if bool(regions) == bool(mask_path):
+        raise ValueError("give exactly one of regions or mask")
+
+    width, height, channels, pixels = imagelib.read_png(image)
+    mask = (imagelib.mask_from_png(mask_path, width, height) if mask_path
+            else imagelib.rect_mask(width, height, regions))
+
+    N = INPAINT_TILE
+    small = imagelib.resize(pixels, width, height, N, N, channels)
+    # Carry the hole through the same resampler, then take anything that picked
+    # up a trace of it: a hole that shrinks under downsampling leaves a rim of
+    # the thing we were asked to remove.
+    hole_src = bytes(0 if m else 255 for m in mask)
+    hole_small = imagelib.resize(hole_src, width, height, N, N, 1)
+    mask_small = bytes(0 if h > 2 else 1 for h in hole_small)
+    payload = imagelib.write_png(None, N, N, 4,
+                                 imagelib.to_rgba_with_hole(small, N, N, channels, mask_small))
+
+    timeout = int(args.get("timeout_seconds") or 120)
+    # Identify ourselves. urllib's default is "Python-urllib/3.x", which any
+    # sensible bot filter blocks on sight — including the one in front of the
+    # server this was first pointed at.
+    req = urllib.request.Request(
+        url, data=payload, method="POST",
+        headers={"Content-Type": "image/png",
+                 "User-Agent": "imagebridge/%s (object removal)" % SERVER_VERSION})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            filled_png = resp.read()
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError("the inpaint server answered %s %s" % (exc.code, exc.reason))
+    except Exception as exc:
+        hint = ""
+        if "CERTIFICATE_VERIFY_FAILED" in str(exc):
+            hint = ("\nThis is a certificate store problem on this machine, not a problem with "
+                    "the server: this Python cannot find a CA bundle. On macOS run the "
+                    "'Install Certificates.command' that ships with Python, or point SSL_CERT_FILE "
+                    "at a bundle such as /etc/ssl/cert.pem. Do not work around it by disabling "
+                    "verification.")
+        raise RuntimeError("could not reach the inpaint server at %s: %s%s" % (url, exc, hint))
+
+    try:
+        fw, fh, fch, fpx = imagelib.read_png_bytes(filled_png)
+    except Exception as exc:
+        raise RuntimeError("the inpaint server did not return a usable PNG: %s" % exc)
+    if fch != 3:   # compose() reads the fill as RGB
+        fpx = b"".join(fpx[i * fch:i * fch + 3] for i in range(fw * fh))
+
+    out_path = args.get("output_path") or (os.path.splitext(image)[0] + "-removed.png")
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)) or ".", exist_ok=True)
+    imagelib.write_png(out_path, width, height, channels,
+                       imagelib.compose(fpx, fw, fh, pixels, width, height, channels, mask))
+
+    removed = sum(1 for m in mask if not m)
+    previews, notes = _image_blocks([out_path], args.get("return_image"))
+    text = ("Removed %d pixel%s (%.1f%% of the image) and filled the gap.\n%s  (%s)\n\n"
+            "The original is untouched. This fills from the surroundings — check that the result "
+            "is plausible rather than assuming it is."
+            % (removed, "" if removed == 1 else "s", 100.0 * removed / (width * height),
+               out_path, _describe(out_path)))
+    if notes:
+        text += "\n" + "\n".join("- " + n for n in notes)
+    return {"content": [{"type": "text", "text": text}] + previews
+            + [{"type": "resource_link", "uri": "file://" + out_path,
+                "name": os.path.basename(out_path), "description": "Object removed",
+                "mimeType": "image/png"}],
+            "structuredContent": {"path": out_path, "removed_pixels": removed}}
+
+
 def tool_check_setup(_args):
     def probe(cmd):
         try:
@@ -588,6 +727,7 @@ def tool_check_setup(_args):
 HANDLERS = {
     "generate_image": tool_generate_image,
     "edit_image": tool_edit_image,
+    "remove_object": tool_remove_object,
     "ask_codex": tool_ask_codex,
     "check_setup": tool_check_setup,
 }
