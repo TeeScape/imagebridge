@@ -253,6 +253,25 @@ openai-edit: the mask must have the same dimensions as the image.
              mask  mask.png: 96x96
 ```
 
+## Reading a photograph
+
+`imagelib` decodes 8-bit non-interlaced PNG and nothing else, on purpose — it is 300 lines of
+zlib and arithmetic with no dependency behind it. But the picture someone wants an object removed
+from is usually a photograph, which is a JPEG, and the answer "not a PNG" is not an answer.
+
+So anything that is not a readable PNG is converted first, using a tool that is already on the
+machine — `sips` (built into macOS), `magick`, `convert` or `ffmpeg`, tried in that order. The
+same route rescues 16-bit and interlaced PNGs. Nothing is added to your Python, and if none of
+those is installed the error names them instead of saying "not a PNG":
+
+```
+cannot read holiday.jpg - not a PNG.
+no image converter is installed: expected one of sips, magick, convert, ffmpeg
+```
+
+`check_setup` reports which converter was found. Output is always written as PNG, so an edited
+JPEG is not re-compressed a second time.
+
 ## Measuring the result instead of trusting it
 
 Every image tool here ends by returning a path and an agreeable sentence. Neither is evidence.

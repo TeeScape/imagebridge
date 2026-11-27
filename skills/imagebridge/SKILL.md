@@ -130,6 +130,15 @@ file on disk. The two cannot be combined.
 mask (`openai-edit`). Transparency, references and GIFs are all free. Never send the user to the
 paid path without saying it costs money and why the free one cannot do it.
 
+## Photographs, and other formats
+
+`inspect_image` and `remove_object` take JPEGs, 16-bit PNGs and interlaced PNGs, by converting
+with `sips`, `magick`, `convert` or `ffmpeg` — whichever is already installed. Do not ask the
+user to convert a file by hand. If none is installed the error names them; relay that.
+
+Results are written as PNG even when the input was a JPEG, so the picture is not compressed a
+second time. Say so if the user expected a `.jpg` back.
+
 ## Checking what an edit actually did
 
 `inspect_image` is free, offline and instant. Call it after `edit_image` and `remove_object`

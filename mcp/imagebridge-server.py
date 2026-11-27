@@ -17,6 +17,8 @@ import base64
 import json
 import os
 import signal
+import tempfile
+import shutil
 import ssl
 import struct
 import urllib.error
@@ -25,7 +27,7 @@ import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.9.1"
+SERVER_VERSION = "0.10.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -384,6 +386,74 @@ TOOLS = [
 PREVIEW_SIDE = 384
 
 
+# Converters that are already on the machine, best first. None is a dependency:
+# if none is present the tools say so and name the command to run, rather than
+# failing with four words. Arguments are passed as a list, never through a shell.
+CONVERTERS = (
+    ("sips",    lambda i, o: ["sips", "-s", "format", "png", "-s", "formatOptions", "best", i, "--out", o]),
+    ("magick",  lambda i, o: ["magick", i, "png24:" + o]),
+    ("convert", lambda i, o: ["convert", i, "png24:" + o]),
+    ("ffmpeg",  lambda i, o: ["ffmpeg", "-v", "error", "-y", "-i", i, "-pix_fmt", "rgb24", o]),
+)
+
+
+def converter_available():
+    for name, _ in CONVERTERS:
+        if shutil.which(name):
+            return name
+    return None
+
+
+def read_image(path):
+    """Pixels from any image this machine can turn into a plain 8-bit PNG.
+
+    imagelib handles 8-bit non-interlaced PNG and nothing else, on purpose. But
+    the picture someone wants an object removed from is usually a photograph,
+    which is a JPEG, and a 16-bit or interlaced PNG hits the same wall. Rather
+    than widen the decoder, convert with whatever is already installed - sips
+    ships with macOS - and read the result.
+    """
+    try:
+        return imagelib.read_png(path)
+    except imagelib.Unsupported as first:
+        pass
+    except Exception:
+        raise
+
+    tried = []
+    tmp = tempfile.mkdtemp(prefix="imagebridge-conv-")
+    try:
+        for name, build in CONVERTERS:
+            if not shutil.which(name):
+                continue
+            out = os.path.join(tmp, "converted.png")
+            try:
+                subprocess.run(build(path, out), check=True, timeout=120,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                return imagelib.read_png(out)
+            except Exception as exc:
+                tried.append("%s (%s)" % (name, str(exc).strip()[:80]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    detail = ("tried " + ", ".join(tried)) if tried else (
+        "no image converter is installed: expected one of " +
+        ", ".join(n for n, _ in CONVERTERS))
+    raise RuntimeError(
+        "cannot read %s - %s.\n%s\nImageBridge reads 8-bit PNG directly and converts anything "
+        "else with a tool already on the machine. On macOS sips is built in; elsewhere install "
+        "ImageMagick or ffmpeg. Tell the user that rather than asking them for a different file."
+        % (os.path.basename(path), _png_reason(path), detail))
+
+
+def _png_reason(path):
+    try:
+        imagelib.read_png(path)
+        return "it reads fine"
+    except Exception as exc:
+        return str(exc)
+
+
 def _describe(path):
     """'1254x1254, 1.2 MB' for a saved file, without assuming it is a PNG."""
     size = png_size(path)
@@ -700,7 +770,7 @@ def tool_remove_object(args):
     if bool(regions) == bool(mask_path):
         raise ValueError("give exactly one of regions or mask")
 
-    width, height, channels, pixels = imagelib.read_png(image)
+    width, height, channels, pixels = read_image(image)
     mask = (imagelib.mask_from_png(mask_path, width, height) if mask_path
             else imagelib.rect_mask(width, height, regions))
 
@@ -773,7 +843,7 @@ def tool_inspect_image(args):
     image = args.get("image")
     if not image or not os.path.isfile(image):
         raise ValueError("image not found: %s" % image)
-    a = imagelib.read_png(image)
+    a = read_image(image)
     info = imagelib.stats(*a)
 
     lines = ["%s: %dx%d, %s" % (os.path.basename(image), info["width"], info["height"],
@@ -792,7 +862,7 @@ def tool_inspect_image(args):
             raise ValueError("compare_to not found: %s" % other)
         tol = args.get("tolerance")
         tol = 8 if tol is None else max(0, min(255, int(tol)))
-        d = imagelib.diff(imagelib.read_png(other), a, tolerance=tol)
+        d = imagelib.diff(read_image(other), a, tolerance=tol)
         info["comparison"] = d
         info["compared_to"] = other
         if not d["changed_pixels"]:
@@ -827,6 +897,10 @@ def tool_check_setup(_args):
         "Codex auth   : %s" % ((auth or "unknown - run `codex login` yourself") if codex else "n/a"),
         "OpenAI CLI   : %s" % (probe(["openai", "--version"]) or "not installed (only needed for exact-size images)"),
         "OPENAI_API_KEY: %s" % ("set" if os.environ.get("OPENAI_API_KEY") else "not set (fine - the Codex path does not use it)"),
+        "Image reader : 8-bit PNG directly; %s" % (
+            ("JPEG and the rest via " + converter_available()) if converter_available()
+            else "NOTHING ELSE - no sips, magick or ffmpeg on PATH, so a JPEG cannot be read"),
+        "Object removal: %s" % (inpaint_url() or "off - no endpoint configured in " + CONFIG_PATH),
         "Scripts      : %s" % (SCRIPT_DIR if os.path.isdir(SCRIPT_DIR) else "MISSING at " + SCRIPT_DIR),
         "Server       : %s %s on python %s" % (SERVER_NAME, SERVER_VERSION, sys.version.split()[0]),
     ]
@@ -836,7 +910,9 @@ def tool_check_setup(_args):
     report.append("Ready to generate images: %s" % ("yes" if ready else "no - fix the lines above"))
     return {
         "content": [{"type": "text", "text": "\n".join(report)}],
-        "structuredContent": {"ready": ready, "codex_installed": bool(codex), "signed_in": signed_in},
+        "structuredContent": {"ready": ready, "codex_installed": bool(codex), "signed_in": signed_in,
+                              "converter": converter_available(),
+                              "inpaint_configured": bool(inpaint_url())},
     }
 
 
