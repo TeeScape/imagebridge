@@ -154,6 +154,9 @@ With `compare_to` it returns `changed_pixels`, `changed_fraction`, `changed_box`
 sky" can be verified. `silhouette_iou` near 1.000 means the visible shape survived a recolour.
 `changed_pixels: 0` means the edit did not happen — say so; it reads like success otherwise.
 
+Pass `diff_path` and show the drawing with `SendUserFile`: the image faded back with the changed
+area in pink. A person reads that in a second; a percentage they have to take on trust.
+
 Quote the measurement to the user. A number they can check beats a sentence they cannot.
 
 ## Removing an object — self-hosted, off by default

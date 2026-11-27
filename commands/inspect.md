@@ -19,12 +19,16 @@ This costs nothing, needs no network and takes milliseconds. There is no reason 
    | "remove the sign" | `changed_fraction` is small and the box covers the sign |
    | anything at all | `changed_pixels` is not 0 |
 
-3. **Report the number, not the request.** "3.1% of pixels changed, all inside
+3. **Pass `diff_path` and show the picture.** The numbers are for your decision; a person wants
+   to see where the change landed. One image of a faded photo with the changed area in pink
+   settles in a second what a percentage does not.
+
+4. **Report the number, not the request.** "3.1% of pixels changed, all inside
    [x=265 y=50 w=123 h=100]" tells the user something. "I removed the leaf as requested" does
    not, and is what you would say whether or not it worked.
 
-4. `tolerance` defaults to 8 so PNG re-encoding does not read as an edit. Drop it to 0 to see
+5. `tolerance` defaults to 8 so PNG re-encoding does not read as an edit. Drop it to 0 to see
    every last bit.
 
-5. If `changed_pixels` is 0, say the edit did not happen. Do not describe an edit you cannot
+6. If `changed_pixels` is 0, say the edit did not happen. Do not describe an edit you cannot
    measure.

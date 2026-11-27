@@ -681,3 +681,59 @@ def fit_canvas(pixels, width, height, channels, box, out_w, out_h, mode="pad",
             d = (ty * out_w + tx) * channels_out
             canvas[d:d + channels_out] = scaled[s:s + channels_out]
     return out_w, out_h, channels_out, bytes(canvas), round(scale, 4)
+
+
+def changed_mask(a, b, tolerance=8):
+    """Which pixels differ, as 1 = changed. Same arguments as diff()."""
+    aw, ah, ac, ap = a
+    bw, bh, bc, bp = b
+    if (aw, ah) != (bw, bh):
+        raise Unsupported("the images are %dx%d and %dx%d, so they cannot be compared"
+                          % (aw, ah, bw, bh))
+    out = bytearray(aw * ah)
+    for i in range(aw * ah):
+        ar, ag, ab = _rgb(ap, i, ac)
+        br, bg, bb = _rgb(bp, i, bc)
+        if (abs(ar - br) > tolerance or abs(ag - bg) > tolerance or abs(ab - bb) > tolerance
+                or abs(_alpha(ap, i, ac) - _alpha(bp, i, bc)) > tolerance):
+            out[i] = 1
+    return bytes(out)
+
+
+def highlight(pixels, width, height, channels, changed, box=None,
+              tint=(228, 0, 124), fade=0.82):
+    """A picture of what changed: the image faded out, the changes in `tint`.
+
+    "37% of pixels changed, inside [24,117,464,278]" is the right answer for
+    an agent deciding whether an edit did as asked. It is a poor answer for a
+    person, who wants to see where. This is the same measurement, drawn.
+    """
+    out = bytearray(width * height * 3)
+    for i in range(width * height):
+        r, g, b = _rgb(pixels, i, channels)
+        if changed[i]:
+            # Keep some of the underlying image so the shape stays readable.
+            r = int(r * 0.35 + tint[0] * 0.65)
+            g = int(g * 0.35 + tint[1] * 0.65)
+            b = int(b * 0.35 + tint[2] * 0.65)
+        else:
+            r = int(r + (255 - r) * fade)
+            g = int(g + (255 - g) * fade)
+            b = int(b + (255 - b) * fade)
+        o = i * 3
+        out[o], out[o + 1], out[o + 2] = r, g, b
+
+    if box:
+        bx, by, bw, bh = box
+        edge = (90, 90, 90)
+        for x in range(max(0, bx), min(width, bx + bw)):
+            for y in (by, by + bh - 1):
+                if 0 <= y < height:
+                    o = (y * width + x) * 3
+                    out[o], out[o + 1], out[o + 2] = edge
+        for y in range(max(0, by), min(height, by + bh)):
+            for x in (bx, bx + bw - 1):
+                if 0 <= x < width:
+                    o = (y * width + x) * 3
+                    out[o], out[o + 1], out[o + 2] = edge
+    return bytes(out)

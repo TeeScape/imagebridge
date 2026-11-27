@@ -424,6 +424,28 @@ has  "the text warns about the resampler"        "$r" "Resampling puts a floor"
 r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":37,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/flat.png\"}}}" | tail -1)
 r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":38,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/flat.png\"}}}" | tail -1)
 jhas "same-size pairs are not rescaled"          "$r" "'rescaled' not in d['result']['structuredContent']['comparison']"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":39,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/flat.png\",\"diff_path\":\"$WORK/diff.png\"}}}" | tail -1)
+jhas "a diff image is written when asked"    "$r" "d['result']['structuredContent']['diff_path'].endswith('diff.png')"
+has  "and the text points at it"             "$r" "show this rather than quoting"
+r=$(python3 -c "
+import sys; sys.path.insert(0,'$ROOT/mcp'); import imagelib as L
+w,h,c,px = L.read_png('$WORK/diff.png')
+inside  = L._rgb(px,(20*w+35),c)     # inside the box that changed
+outside = L._rgb(px,(55*w+10),c)     # untouched background
+print('%dx%d' % (w,h), 'tinted' if inside[0]>150 and inside[1]<120 and inside[2]>100 else 'not-tinted',
+      'faded' if min(outside)>235 else 'not-faded')")
+has "it is the size of the image"            "$r" "64x64"
+has "changed pixels are tinted"              "$r" " tinted"
+has "untouched pixels are faded back"        "$r" "faded"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed-big.png\",\"compare_to\":\"$WORK/boxed.png\",\"diff_path\":\"$WORK/diff2.png\"}}}" | tail -1)
+jhas "a rescaled pair can be drawn too"      "$r" "d['result'].get('isError') is not True"
+r=$(python3 -c "
+import sys; sys.path.insert(0,'$ROOT/mcp'); import imagelib as L
+print('%dx%d' % L.read_png('$WORK/diff2.png')[:2])")
+has "drawn on the grid it compared on"       "$r" "64x64"
+
+
+
 
 echo
 echo "malformed and hostile PNGs"

@@ -39,6 +39,24 @@ Claude: [runs codex-image] → assets/folder.png
 | `/imagebridge:inspect` | pure arithmetic, locally | **no** | checking an edit did what was asked |
 | `/imagebridge:doctor` | — | — | check your setup |
 
+### What that looks like
+
+Remove something, then check that only that thing changed — the measurement is the point, and the
+third picture *is* the measurement:
+
+| before | after | what changed |
+|---|---|---|
+| <img src="assets/example-before.png" width="240" alt="A red apple with a green leaf"> | <img src="assets/example-after.png" width="240" alt="The same apple, the leaf gone, the background closed over it"> | <img src="assets/example-diff.png" width="240" alt="The same apple faded out, with the area the leaf occupied drawn in pink inside a box"> |
+| `remove_object` was pointed at one `[x, y]` inside the leaf | 8,609 pixels removed and filled; the stem and the apple were never touched | `inspect_image`: 3.1% of pixels changed, **all** inside the box, silhouette IoU 1.000 |
+
+Ask the free path for an icon and it returns a composition, not an icon. `fit_image` trims and
+reframes it, locally and for nothing:
+
+| as generated | after `fit_image` |
+|---|---|
+| <img src="assets/example-fit-before.png" width="240" alt="A blue cup on a wide white canvas, most of the frame empty"> | <img src="assets/example-fit-after.png" width="240" alt="The same cup, centred on a square canvas"> |
+| 512×341 — 66% of the frame is empty border | 512×512, trimmed and centred, in milliseconds |
+
 Plus a **skill** that fires on its own: say *"make me an icon for this"* or *"ask Codex what it thinks
 of this diff"* and Claude reaches for the right one without you typing a command.
 
@@ -53,7 +71,7 @@ The plugin also ships an **MCP server**, so Claude gets real typed tools instead
 | `ask_codex` | prompt, optional `cwd` / `allow_writes` / `images` / `stdin_text` → returns Codex's answer |
 | `remove_object` | `image`, and **either** `regions` (`[x, y, w, h]` boxes) **or** a `mask` PNG where alpha 0 is the hole → returns the filled path. Off until you configure an endpoint |
 | `fit_image` | `image`, `width`, optional `height` / `mode` / `trim` / `background` / `margin` → an image of exactly that size, border trimmed |
-| `inspect_image` | `image`, optional `compare_to` / `tolerance` → size, transparency, dominant colours, and for a pair: pixels changed, the box they landed in, silhouette IoU |
+| `inspect_image` | `image`, optional `compare_to` / `tolerance` / `diff_path` → size, transparency, dominant colours, and for a pair: pixels changed, the box they landed in, silhouette IoU, and a drawing of the change |
 | `check_setup` | reports what is installed, signed in and missing |
 
 It is **one Python file with no dependencies** — stdlib only, nothing to `pip install`. It needs
@@ -304,6 +322,10 @@ Against apple-512.png: 3.1% of pixels changed, all inside [x=265 y=50 w=123 h=10
 That box is the whole point: "change only the sky" becomes checkable rather than believable, and
 `changed_pixels: 0` catches the case where nothing happened at all — which otherwise reads
 exactly like success. The README's own 1.000 IoU figure further up was measured this way.
+
+`diff_path` draws the comparison: the image faded back, everything that changed in pink, the
+changed area boxed. The numbers are the right answer for an agent deciding whether an edit did as
+asked; they are a poor answer for a person, who wants to see where. Show the picture.
 
 It is free, offline and instant, so use it after every edit. `tolerance` defaults to 8 so PNG
 re-encoding noise is not reported as an edit.

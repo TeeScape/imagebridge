@@ -38,7 +38,7 @@ if sys.version_info < (3, 8):
     raise SystemExit(1)
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.16.0"
+SERVER_VERSION = "0.17.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -386,6 +386,7 @@ TOOLS = [
                 "image": {"type": "string", "description": "Path of the PNG to measure."},
                 "compare_to": {"type": "string", "description": "A second PNG of the SAME dimensions - usually the original, to see what the edit changed."},
                 "tolerance": {"type": "integer", "description": "How far a channel may move before it counts as changed, 0-255. Default 8, which ignores re-encoding noise."},
+                "diff_path": {"type": "string", "description": "With compare_to: also draw the difference here as a PNG - the image faded out, everything that changed in pink, the changed area boxed. Numbers are for you; show this to the person."},
             },
             "required": ["image"],
             "additionalProperties": False,
@@ -946,10 +947,22 @@ def tool_inspect_image(args):
             rescaled = "%s was %dx%d and is compared at %dx%d" % (
                 who, big[0], big[1], small[0], small[1])
             d = imagelib.diff(b_cmp, a_cmp, tolerance=tol)
+            pair = (b_cmp, a_cmp)
         else:
             d = imagelib.diff(b, a, tolerance=tol)
+            pair = (b, a)
         if rescaled:
             d["rescaled"] = rescaled
+
+        diff_path = args.get("diff_path")
+        if diff_path:
+            before, after = pair
+            changed = imagelib.changed_mask(before, after, tolerance=tol)
+            drawn = imagelib.highlight(after[3], after[0], after[1], after[2],
+                                       changed, d["changed_box"])
+            os.makedirs(os.path.dirname(os.path.abspath(diff_path)) or ".", exist_ok=True)
+            imagelib.write_png(diff_path, after[0], after[1], 3, drawn)
+            info["diff_path"] = diff_path
         info["comparison"] = d
         info["compared_to"] = other
         if rescaled:
@@ -963,6 +976,9 @@ def tool_inspect_image(args):
             x, y, w, h = d["changed_box"]
             lines.append("Against %s: %.1f%% of pixels changed, all inside [x=%d y=%d w=%d h=%d]."
                          % (os.path.basename(other), d["changed_fraction"] * 100, x, y, w, h))
+            if args.get("diff_path"):
+                lines.append("  drawn at %s - show this rather than quoting the percentage"
+                             % args.get("diff_path"))
             if d["silhouette_iou"] is not None:
                 lines.append("  silhouette IoU %.3f%s" % (
                     d["silhouette_iou"],
