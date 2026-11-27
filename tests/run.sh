@@ -400,13 +400,30 @@ jhas "and it says so plainly"            "$r" "'it did not' in d['result']['cont
 r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/boxed2.png\",\"tolerance\":0}}}" | tail -1)
 jhas "tolerance 0 sees it"               "$r" "d['result']['structuredContent']['comparison']['changed_pixels']==600"
 
-make_png "$WORK/wrongsize.png" 96 96 0
-r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/wrongsize.png\"}}}" | tail -1)
-jhas "mismatched sizes are refused"      "$r" "d['result'].get('isError') is True and 'cannot be compared' in d['result']['content'][0]['text']"
 
 make_png "$WORK/alpha.png" 64 64 1
 r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/alpha.png\"}}}" | tail -1)
 jhas "alpha is detected"                 "$r" "d['result']['structuredContent']['has_alpha'] is True"
+
+# The free edit path hands back whatever size the model picked, so a
+# comparison that refuses on a size difference is advice nobody can follow.
+python3 - "$ROOT" "$WORK" <<'MK'
+import sys; sys.path.insert(0, sys.argv[1] + "/mcp"); import imagelib as L
+w, h, c, px = L.read_png(sys.argv[2] + "/boxed.png")
+L.write_png(sys.argv[2] + "/boxed-big.png", w * 2, h * 2, c, L.resize(px, w, h, w * 2, h * 2, c))
+MK
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed-big.png\",\"compare_to\":\"$WORK/boxed.png\"}}}" | tail -1)
+jhas "different sizes are compared, not refused" "$r" "d['result'].get('isError') is not True"
+jhas "and the rescaling is declared"             "$r" "'rescaled' in d['result']['structuredContent']['comparison']"
+# Measured, not wished for: a 64->128->64 round trip of this fixture moves
+# 4.8% of pixels, every one of them on the shape's edge. That is the
+# resampler's floor and the reason the tool says so in words.
+jhas "a 2x copy differs only by the resampler" "$r" "d['result']['structuredContent']['comparison']['changed_fraction'] < 0.08"
+jhas "and only along the shape's edges"        "$r" "d['result']['structuredContent']['comparison']['changed_box']==[19,9,32,22]"
+has  "the text warns about the resampler"        "$r" "Resampling puts a floor"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":37,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/flat.png\"}}}" | tail -1)
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":38,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/flat.png\"}}}" | tail -1)
+jhas "same-size pairs are not rescaled"          "$r" "'rescaled' not in d['result']['structuredContent']['comparison']"
 
 echo
 echo "install.sh (standalone install, into a throwaway HOME)"

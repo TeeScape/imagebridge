@@ -145,6 +145,10 @@ second time. Say so if the user expected a `.jpg` back.
 `inspect_image` is free, offline and instant. Call it after `edit_image` and `remove_object`
 rather than reporting what you asked for as though it were what happened.
 
+The two need not be the same size — the free edit path routinely returns a different one — but
+then a few per cent of pixels differ from resampling alone, and the tool says when it rescaled.
+Read the changed *box*, not only the percentage.
+
 With `compare_to` it returns `changed_pixels`, `changed_fraction`, `changed_box` and
 `silhouette_iou`. The box is the evidence: it says where the change landed, so "change only the
 sky" can be verified. `silhouette_iou` near 1.000 means the visible shape survived a recolour.

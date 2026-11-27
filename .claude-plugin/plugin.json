@@ -1,6 +1,6 @@
 {
   "name": "imagebridge",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "displayName": "ImageBridge",
   "description": "Let Claude Code hand work to the OpenAI Codex CLI and get the result back — above all image generation, which Claude cannot do itself. Generates icons, illustrations and mockups on your signed-in ChatGPT plan with no API key, asks a GPT model for a second opinion on a diff, and delegates self-contained coding tasks off the Claude budget.",
   "author": {

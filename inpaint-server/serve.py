@@ -36,6 +36,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mcp"))
 import imagelib  # noqa: E402
 
+if sys.version_info < (3, 8):
+    sys.stderr.write("this server needs Python 3.8 or newer; this is %s.\n"
+                     % ".".join(str(n) for n in sys.version_info[:3]))
+    raise SystemExit(1)
+
 N = 512
 MAX_BODY = 8 * 1024 * 1024
 

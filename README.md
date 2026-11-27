@@ -68,6 +68,9 @@ export MCP_TOOL_TIMEOUT=600000   # milliseconds
 ## Requirements
 
 - [Claude Code](https://claude.com/claude-code)
+- **Python 3.8 or newer** — the MCP server and `imagelib` are pure standard library, no `pip`
+  install of any kind. The suite runs on 3.8 through 3.14; below 3.8 the server says so and
+  stops, rather than failing with a SyntaxError from somewhere in the middle.
 - [OpenAI Codex CLI](https://github.com/openai/codex), signed in with ChatGPT:
   ```bash
   brew install --cask codex    # or: npm install -g @openai/codex
@@ -304,6 +307,13 @@ exactly like success. The README's own 1.000 IoU figure further up was measured 
 
 It is free, offline and instant, so use it after every edit. `tolerance` defaults to 8 so PNG
 re-encoding noise is not reported as an edit.
+
+The two images need not be the same size. They often are not: the free edit path hands back
+whatever size the model chose — a 512×512 cup sent for recolouring came back at 1254×1254 — and a
+comparison that refused on that would be advice nobody could follow. The larger is compared on
+the smaller's grid, which the output says, with the caveat it deserves: downscaling an image and
+back moves a few per cent of its pixels (4.8% for the suite's fixture), all of them on edges. So
+a small difference may be the resampler; a difference in the wrong *place* is the edit.
 
 ## Object removal (optional)
 

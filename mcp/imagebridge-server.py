@@ -26,8 +26,19 @@ import urllib.request
 import subprocess
 import sys
 
+# Checked before anything else, in syntax every Python 3 can parse, so an old
+# interpreter gets a sentence instead of a SyntaxError from somewhere further
+# down. 3.8 is the floor because it is the oldest this is actually tested on;
+# the code itself would likely run on 3.7.
+if sys.version_info < (3, 8):
+    sys.stderr.write(
+        "imagebridge needs Python 3.8 or newer; this is %s.\n"
+        "Point Claude Code's MCP config at a newer python3.\n"
+        % ".".join(str(n) for n in sys.version_info[:3]))
+    raise SystemExit(1)
+
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.14.0"
+SERVER_VERSION = "0.15.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -909,9 +920,38 @@ def tool_inspect_image(args):
             raise ValueError("compare_to not found: %s" % other)
         tol = args.get("tolerance")
         tol = 8 if tol is None else max(0, min(255, int(tol)))
-        d = imagelib.diff(read_image(other), a, tolerance=tol)
+        b = read_image(other)
+        rescaled = None
+        if (b[0], b[1]) != (a[0], a[1]):
+            # The free edit path hands back whatever size the model chose, so
+            # "measure every edit" would be advice that usually cannot be
+            # followed. Compare on the smaller grid: downscaling discards
+            # detail, upscaling would invent it, and the question being asked
+            # - what changed, and where - survives the first but not the
+            # second. Resampling is not free, though, so say so: small
+            # differences here are the resampler, not the edit.
+            if b[0] * b[1] <= a[0] * a[1]:
+                small, big, who = b, a, "this image"
+            else:
+                small, big, who = a, b, os.path.basename(other)
+            scaled = imagelib.resize(big[3], big[0], big[1], small[0], small[1], big[2])
+            if big is a:
+                a_cmp, b_cmp = (small[0], small[1], big[2], scaled), small
+            else:
+                a_cmp, b_cmp = small, (small[0], small[1], big[2], scaled)
+            rescaled = "%s was %dx%d and is compared at %dx%d" % (
+                who, big[0], big[1], small[0], small[1])
+            d = imagelib.diff(b_cmp, a_cmp, tolerance=tol)
+        else:
+            d = imagelib.diff(b, a, tolerance=tol)
+        if rescaled:
+            d["rescaled"] = rescaled
         info["comparison"] = d
         info["compared_to"] = other
+        if rescaled:
+            lines.append("The two are different sizes: %s. Resampling puts a floor under these "
+                         "numbers - a few per cent of changed pixels may be the resampler rather "
+                         "than the edit." % rescaled)
         if not d["changed_pixels"]:
             lines.append("Nothing changed against %s - not one pixel beyond tolerance %d. If an "
                          "edit was meant to happen, it did not." % (os.path.basename(other), tol))
@@ -1004,7 +1044,8 @@ def tool_check_setup(_args):
             else "NOTHING ELSE - no sips, magick or ffmpeg on PATH, so a JPEG cannot be read"),
         "Object removal: %s" % (inpaint_url() or "off - no endpoint configured in " + CONFIG_PATH),
         "Scripts      : %s" % (SCRIPT_DIR if os.path.isdir(SCRIPT_DIR) else "MISSING at " + SCRIPT_DIR),
-        "Server       : %s %s on python %s" % (SERVER_NAME, SERVER_VERSION, sys.version.split()[0]),
+        "Server       : %s %s on python %s (needs 3.8+, tested to 3.14)"
+        % (SERVER_NAME, SERVER_VERSION, sys.version.split()[0]),
     ]
     signed_in = bool(codex) and bool(auth) and "logged in" in auth.lower()
     ready = bool(codex) and signed_in and os.path.isdir(SCRIPT_DIR)

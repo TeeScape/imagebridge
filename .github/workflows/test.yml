@@ -15,9 +15,15 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        # The oldest supported and the newest released. A floor nobody runs is
+        # a floor nobody knows is broken.
+        python: ["3.8", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
       - name: Show the toolchain under test
         run: |
           uname -a
