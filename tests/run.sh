@@ -347,6 +347,16 @@ is "a notification gets no reply" "$(printf '%s' "$r" | grep -c '"id"')" "2"
 
 echo
 echo
+echo "reference inpaint server (no onnxruntime needed for these)"
+python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$ROOT/inpaint-server/serve.py" \
+  && ok "serve.py parses" || bad "serve.py parses"
+r=$(cd "$ROOT/inpaint-server" && python3 serve.py 2>&1; echo "rc=$?")
+has "it refuses to start with no model"  "$r" "give --model"
+has "and exits non-zero"                 "$r" "rc=1"
+r=$(cd "$ROOT/inpaint-server" && python3 serve.py --model /nope/missing.onnx 2>&1)
+has "a missing model file is named"      "$r" "model not found"
+
+echo
 echo "inspect_image (measurement only; no model, no network)"
 box() { # path, box-colour-or-none
 python3 - "$1" "$2" "$ROOT" <<'MK'

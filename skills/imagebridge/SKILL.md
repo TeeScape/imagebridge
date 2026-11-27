@@ -157,8 +157,10 @@ Quote the measurement to the user. A number they can check beats a sentence they
 The `remove_object` MCP tool erases something and fills the gap. It is the only tool here that
 does not use the ChatGPT plan: it POSTs a 512×512 RGBA PNG (alpha 0 = hole) to an inpainting
 endpoint the **user** hosts and gets the filled image back. There is deliberately no default URL.
-If `IMAGEBRIDGE_INPAINT_URL` or `~/.imagebridge/config.json` is unset, the tool says so — point
-the user at the README's "Object removal (optional)" section; never invent an endpoint.
+If `IMAGEBRIDGE_INPAINT_URL` or `~/.imagebridge/config.json` is unset, the tool says so. Never
+invent an endpoint. Tell the user the repo ships one they can run themselves in `inpaint-server/`
+(one file, `onnxruntime` and `numpy`, a LaMa ONNX model they supply) and point at the README's
+"Object removal (optional)" section.
 
 Prefer `points`: one `[x, y]` well inside each object. The area grows out from it by colour, so
 it follows the object's real shape — measured on one picture, a point left no trace of a leaf

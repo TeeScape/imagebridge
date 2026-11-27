@@ -324,6 +324,21 @@ The contract is one POST, body `image/png`, response `image/png`: a 512×512 RGB
 **alpha 0 marks the hole**, answered with the filled RGB image. Any LaMa (Apache-2.0) or MI-GAN
 (MIT) server with that shape works; nothing proprietary is involved.
 
+**If you have no such server, [`inpaint-server/`](inpaint-server/) is one** — a single file, two
+dependencies, your own machine. Saying "point it at your own endpoint" while providing no way to
+have one is not a choice, it is a dead end:
+
+```bash
+pip install -r inpaint-server/requirements.txt
+python3 inpaint-server/serve.py --model /path/to/lama.onnx --port 8421
+export IMAGEBRIDGE_INPAINT_URL=http://127.0.0.1:8421/
+```
+
+It checks the model's signature at startup and tells you what it found if the shape is wrong,
+because LaMa has been exported under many filenames with more than one signature. Run against the
+same picture as a separately hosted endpoint it produced a bit-identical result — `inspect_image`
+reported 0 pixels changed.
+
 It fills one **window per hole**, not the whole picture. The model only ever sees a 512 square,
 so handing it a 4000px photo renders the fill at an eighth of the picture's resolution and
 returns a soft patch in a sharp photograph. Cropping a window around each hole keeps the fill at
@@ -373,9 +388,10 @@ it guards against are GNU-vs-BSD differences that a macOS-only run cannot see.
 
 ```
 .claude-plugin/     plugin.json + marketplace.json (this repo is its own marketplace)
-commands/           the four slash commands
-skills/imagebridge/ SKILL.md and the three bash scripts it drives
-mcp/                the zero-dependency MCP server
+commands/           the slash commands
+skills/imagebridge/ SKILL.md and the bash scripts it drives
+mcp/                the zero-dependency MCP server, and imagelib's PNG arithmetic
+inpaint-server/     optional: a LaMa endpoint to run yourself (onnxruntime + numpy)
 tests/              the stub-codex suite
 .github/workflows/  CI on Linux and macOS
 assets/             logo, icon, social preview
