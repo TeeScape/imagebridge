@@ -274,3 +274,107 @@ def compose(filled, fw, fh, original, width, height, channels, mask):
                 if channels == 2:
                     out[o + 1] = 255
     return bytes(out)
+
+
+def _rgb(pixels, i, channels):
+    """The RGB triple of pixel i, whatever the colour type was."""
+    if channels <= 2:                       # grey, grey+alpha
+        g = pixels[i * channels]
+        return g, g, g
+    o = i * channels
+    return pixels[o], pixels[o + 1], pixels[o + 2]
+
+
+def _alpha(pixels, i, channels):
+    return 255 if channels in (1, 3) else pixels[i * channels + channels - 1]
+
+
+def stats(width, height, channels, pixels, top=4):
+    """What is actually in this image: mean and dominant colour over the
+    pixels you can see, plus how much of it is transparent.
+
+    The mean ignores transparent pixels on purpose. Averaging in the empty
+    space around an icon drags every colour towards whatever the file happens
+    to store under alpha 0, and reports a tint that nobody can see.
+    """
+    n = width * height
+    tot = [0, 0, 0]
+    opaque = 0
+    buckets = {}
+    for i in range(n):
+        if _alpha(pixels, i, channels) == 0:
+            continue
+        opaque += 1
+        r, g, b = _rgb(pixels, i, channels)
+        tot[0] += r
+        tot[1] += g
+        tot[2] += b
+        key = (r >> 4, g >> 4, b >> 4)      # 4096 buckets: enough to name a colour
+        buckets[key] = buckets.get(key, 0) + 1
+    mean = tuple(t // opaque for t in tot) if opaque else None
+    ranked = sorted(buckets.items(), key=lambda kv: -kv[1])[:top]
+    return {
+        "width": width,
+        "height": height,
+        "channels": channels,
+        "has_alpha": channels in (2, 4),
+        "transparent_fraction": round((n - opaque) / n, 4) if n else 0.0,
+        "mean_colour": mean,
+        "dominant_colours": [
+            {"rgb": [(k[0] << 4) + 8, (k[1] << 4) + 8, (k[2] << 4) + 8],
+             "fraction": round(c / opaque, 4)}
+            for k, c in ranked
+        ] if opaque else [],
+    }
+
+
+def diff(a, b, tolerance=8):
+    """Measure what changed between two images of the same size.
+
+    Each is (width, height, channels, pixels), as read_png returns. A channel
+    difference above `tolerance` counts as changed, so PNG re-encoding and the
+    model's own dithering do not read as an edit.
+
+    The bounding box is the point of this: it says WHERE the change landed, so
+    "change only the sky" can be checked instead of believed.
+    """
+    aw, ah, ac, ap = a
+    bw, bh, bc, bp = b
+    if (aw, ah) != (bw, bh):
+        raise Unsupported("the images are %dx%d and %dx%d, so they cannot be compared"
+                          % (aw, ah, bw, bh))
+    n = aw * ah
+    changed = 0
+    x0 = y0 = None
+    x1 = y1 = -1
+    inter = union = 0
+    for i in range(n):
+        aa, ba = _alpha(ap, i, ac), _alpha(bp, i, bc)
+        if aa or ba:
+            union += 1
+            if aa and ba:
+                inter += 1
+        ar, ag, ab = _rgb(ap, i, ac)
+        br, bg, bb = _rgb(bp, i, bc)
+        if (abs(ar - br) > tolerance or abs(ag - bg) > tolerance
+                or abs(ab - bb) > tolerance or abs(aa - ba) > tolerance):
+            changed += 1
+            x, y = i % aw, i // aw
+            if x0 is None or x < x0:
+                x0 = x
+            if y0 is None or y < y0:
+                y0 = y
+            if x > x1:
+                x1 = x
+            if y > y1:
+                y1 = y
+    return {
+        "width": aw,
+        "height": ah,
+        "changed_pixels": changed,
+        "changed_fraction": round(changed / n, 4) if n else 0.0,
+        "changed_box": [x0, y0, x1 - x0 + 1, y1 - y0 + 1] if changed else None,
+        # 1.0 means the visible shape is identical; only meaningful with alpha.
+        "silhouette_iou": round(inter / union, 4) if union else None,
+        "tolerance": tolerance,
+    }

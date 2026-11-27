@@ -347,6 +347,51 @@ is "a notification gets no reply" "$(printf '%s' "$r" | grep -c '"id"')" "2"
 
 echo
 echo
+echo "inspect_image (measurement only; no model, no network)"
+box() { # path, box-colour-or-none
+python3 - "$1" "$2" "$ROOT" <<'MK'
+import sys; sys.path.insert(0, sys.argv[3] + "/mcp"); import imagelib as L
+path, col = sys.argv[1], sys.argv[2]
+w = h = 64
+px = bytearray([200, 200, 200] * (w * h))
+if col != "none":
+    r, g, b = (int(col[i:i+2], 16) for i in (0, 2, 4))
+    for y in range(10, 30):
+        for x in range(20, 50):
+            o = (y * w + x) * 3
+            px[o], px[o+1], px[o+2] = r, g, b
+L.write_png(path, w, h, 3, bytes(px))
+MK
+}
+box "$WORK/flat.png" none
+box "$WORK/boxed.png" 1040c0
+box "$WORK/boxed2.png" 1040c8   # within tolerance of boxed.png
+
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\"}}}" | tail -1)
+jhas "inspect reports the size"          "$r" "d['result']['structuredContent']['width']==64"
+jhas "it names the dominant colour"      "$r" "d['result']['structuredContent']['dominant_colours'][0]['rgb']==[200,200,200]"
+jhas "no alpha is reported as such"      "$r" "d['result']['structuredContent']['has_alpha'] is False"
+
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/flat.png\"}}}" | tail -1)
+jhas "it counts the changed pixels"      "$r" "d['result']['structuredContent']['comparison']['changed_pixels']==600"
+jhas "the changed box is exact"          "$r" "d['result']['structuredContent']['comparison']['changed_box']==[20,10,30,20]"
+
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/boxed2.png\"}}}" | tail -1)
+jhas "encoding noise is not an edit"     "$r" "d['result']['structuredContent']['comparison']['changed_pixels']==0"
+jhas "and it says so plainly"            "$r" "'it did not' in d['result']['content'][0]['text']"
+
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/boxed2.png\",\"tolerance\":0}}}" | tail -1)
+jhas "tolerance 0 sees it"               "$r" "d['result']['structuredContent']['comparison']['changed_pixels']==600"
+
+make_png "$WORK/wrongsize.png" 96 96 0
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\",\"compare_to\":\"$WORK/wrongsize.png\"}}}" | tail -1)
+jhas "mismatched sizes are refused"      "$r" "d['result'].get('isError') is True and 'cannot be compared' in d['result']['content'][0]['text']"
+
+make_png "$WORK/alpha.png" 64 64 1
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/alpha.png\"}}}" | tail -1)
+jhas "alpha is detected"                 "$r" "d['result']['structuredContent']['has_alpha'] is True"
+
+echo
 echo "remove_object (stub inpaint server; no network, no model)"
 # A stand-in for the LaMa endpoint: answers any POST with a solid 512 PNG, so
 # the whole path - mask, downscale, HTTP, compose - runs without a model.

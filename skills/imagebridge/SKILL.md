@@ -130,6 +130,18 @@ file on disk. The two cannot be combined.
 mask (`openai-edit`). Transparency, references and GIFs are all free. Never send the user to the
 paid path without saying it costs money and why the free one cannot do it.
 
+## Checking what an edit actually did
+
+`inspect_image` is free, offline and instant. Call it after `edit_image` and `remove_object`
+rather than reporting what you asked for as though it were what happened.
+
+With `compare_to` it returns `changed_pixels`, `changed_fraction`, `changed_box` and
+`silhouette_iou`. The box is the evidence: it says where the change landed, so "change only the
+sky" can be verified. `silhouette_iou` near 1.000 means the visible shape survived a recolour.
+`changed_pixels: 0` means the edit did not happen — say so; it reads like success otherwise.
+
+Quote the measurement to the user. A number they can check beats a sentence they cannot.
+
 ## Removing an object — self-hosted, off by default
 
 The `remove_object` MCP tool erases something and fills the gap. It is the only tool here that

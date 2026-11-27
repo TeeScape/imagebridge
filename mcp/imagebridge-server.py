@@ -24,7 +24,7 @@ import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.7.0"
+SERVER_VERSION = "0.8.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -315,6 +315,30 @@ TOOLS = [
                 "output_path": {"type": "string", "description": "Where to write the result. Defaults to <image>-removed.png next to the original."},
                 "return_image": {"type": "boolean", "description": "Also return a 384px preview so you can check the fill. Default false."},
                 "timeout_seconds": {"type": "integer", "description": "Give up after this long. Default 120."},
+            },
+            "required": ["image"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "inspect_image",
+        "title": "Measure an image, or what changed between two",
+        "description": (
+            "Read an image's real dimensions, transparency and colours, and — with `compare_to` — "
+            "measure what an edit actually did: how many pixels moved, the bounding box they "
+            "landed in, and whether the visible silhouette survived.\n\n"
+            "Use it after edit_image or remove_object instead of taking the model's word. When the "
+            "ask was 'change only the sky', the changed box is the evidence; when it was 'keep the "
+            "shape', silhouette_iou near 1.0 is. Costs nothing, needs no network, and takes "
+            "milliseconds - there is no reason to skip it, and reporting a measured result is "
+            "worth more to the user than repeating what was requested."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "image": {"type": "string", "description": "Path of the PNG to measure."},
+                "compare_to": {"type": "string", "description": "A second PNG of the SAME dimensions - usually the original, to see what the edit changed."},
+                "tolerance": {"type": "integer", "description": "How far a channel may move before it counts as changed, 0-255. Default 8, which ignores re-encoding noise."},
             },
             "required": ["image"],
             "additionalProperties": False,
@@ -694,6 +718,53 @@ def tool_remove_object(args):
             "structuredContent": {"path": out_path, "removed_pixels": removed}}
 
 
+def _hex(rgb):
+    return "#%02x%02x%02x" % tuple(rgb)
+
+
+def tool_inspect_image(args):
+    if imagelib is None:
+        raise RuntimeError("imagelib is unavailable (%s), so this cannot run" % _IMAGELIB_ERROR)
+    image = args.get("image")
+    if not image or not os.path.isfile(image):
+        raise ValueError("image not found: %s" % image)
+    a = imagelib.read_png(image)
+    info = imagelib.stats(*a)
+
+    lines = ["%s: %dx%d, %s" % (os.path.basename(image), info["width"], info["height"],
+                                "with alpha" if info["has_alpha"] else "no alpha")]
+    if info["has_alpha"]:
+        lines.append("  %.1f%% transparent" % (info["transparent_fraction"] * 100))
+    if info["mean_colour"]:
+        lines.append("  mean %s, mostly %s" % (
+            _hex(info["mean_colour"]),
+            ", ".join("%s (%.0f%%)" % (_hex(c["rgb"]), c["fraction"] * 100)
+                      for c in info["dominant_colours"])))
+
+    other = args.get("compare_to")
+    if other:
+        if not os.path.isfile(other):
+            raise ValueError("compare_to not found: %s" % other)
+        tol = args.get("tolerance")
+        tol = 8 if tol is None else max(0, min(255, int(tol)))
+        d = imagelib.diff(imagelib.read_png(other), a, tolerance=tol)
+        info["comparison"] = d
+        info["compared_to"] = other
+        if not d["changed_pixels"]:
+            lines.append("Nothing changed against %s - not one pixel beyond tolerance %d. If an "
+                         "edit was meant to happen, it did not." % (os.path.basename(other), tol))
+        else:
+            x, y, w, h = d["changed_box"]
+            lines.append("Against %s: %.1f%% of pixels changed, all inside [x=%d y=%d w=%d h=%d]."
+                         % (os.path.basename(other), d["changed_fraction"] * 100, x, y, w, h))
+            if d["silhouette_iou"] is not None:
+                lines.append("  silhouette IoU %.3f%s" % (
+                    d["silhouette_iou"],
+                    " - the visible shape is unchanged" if d["silhouette_iou"] > 0.999 else ""))
+    return {"content": [{"type": "text", "text": "\n".join(lines)}],
+            "structuredContent": info}
+
+
 def tool_check_setup(_args):
     def probe(cmd):
         try:
@@ -729,6 +800,7 @@ HANDLERS = {
     "edit_image": tool_edit_image,
     "remove_object": tool_remove_object,
     "ask_codex": tool_ask_codex,
+    "inspect_image": tool_inspect_image,
     "check_setup": tool_check_setup,
 }
 

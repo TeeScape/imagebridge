@@ -35,6 +35,7 @@ Claude: [runs codex-image] → assets/folder.png
 | `/imagebridge:exact` | `openai images generate` | yes | images needing an exact size, quality or count |
 | `/imagebridge:edit` | Codex `$imagegen` + `referenced_image_paths` | **no** | changing part of an image and keeping the rest |
 | `/imagebridge:remove` | your own inpainting endpoint | **no** (self-hosted) | deleting an object and filling the gap |
+| `/imagebridge:inspect` | pure arithmetic, locally | **no** | checking an edit did what was asked |
 | `/imagebridge:doctor` | — | — | check your setup |
 
 Plus a **skill** that fires on its own: say *"make me an icon for this"* or *"ask Codex what it thinks
@@ -50,6 +51,7 @@ The plugin also ships an **MCP server**, so Claude gets real typed tools instead
 | `edit_image` | prompt, `images[]`, optional `from_last`; `provider` defaults to the **free** Codex path → returns the edited path |
 | `ask_codex` | prompt, optional `cwd` / `allow_writes` / `images` / `stdin_text` → returns Codex's answer |
 | `remove_object` | `image`, and **either** `regions` (`[x, y, w, h]` boxes) **or** a `mask` PNG where alpha 0 is the hole → returns the filled path. Off until you configure an endpoint |
+| `inspect_image` | `image`, optional `compare_to` / `tolerance` → size, transparency, dominant colours, and for a pair: pixels changed, the box they landed in, silhouette IoU |
 | `check_setup` | reports what is installed, signed in and missing |
 
 It is **one Python file with no dependencies** — stdlib only, nothing to `pip install`. It needs
@@ -250,6 +252,25 @@ openai-edit: the mask must have the same dimensions as the image.
              image src.png: 64x64
              mask  mask.png: 96x96
 ```
+
+## Measuring the result instead of trusting it
+
+Every image tool here ends by returning a path and an agreeable sentence. Neither is evidence.
+`inspect_image` measures:
+
+```
+apple-noleaf.png: 512x512, no alpha
+  mean #f8a6a4, mostly #f8f8f8 (65%), #f80808 (34%)
+Against apple-512.png: 3.1% of pixels changed, all inside [x=265 y=50 w=123 h=100].
+  silhouette IoU 1.000 - the visible shape is unchanged
+```
+
+That box is the whole point: "change only the sky" becomes checkable rather than believable, and
+`changed_pixels: 0` catches the case where nothing happened at all — which otherwise reads
+exactly like success. The README's own 1.000 IoU figure further up was measured this way.
+
+It is free, offline and instant, so use it after every edit. `tolerance` defaults to 8 so PNG
+re-encoding noise is not reported as an edit.
 
 ## Object removal (optional)
 
