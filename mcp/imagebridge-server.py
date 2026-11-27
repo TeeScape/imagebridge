@@ -38,7 +38,7 @@ if sys.version_info < (3, 8):
     raise SystemExit(1)
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.15.0"
+SERVER_VERSION = "0.15.1"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
