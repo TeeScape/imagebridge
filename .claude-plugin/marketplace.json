@@ -11,7 +11,7 @@
       "name": "imagebridge",
       "source": "./",
       "description": "Let Claude Code hand work to the OpenAI Codex CLI and get the result back — above all image generation, which Claude cannot do itself. Runs on your signed-in ChatGPT plan, no API key required.",
-      "version": "0.15.2",
+      "version": "0.16.0",
       "author": {
         "name": "Teerapol Kittikanjanaruk",
         "url": "https://github.com/TeeScape"

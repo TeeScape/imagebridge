@@ -389,6 +389,28 @@ Two honest limits:
 Everything outside the mask is left bit-for-bit alone: the fill is composed back through the
 mask, not pasted over the picture.
 
+## Hostile input
+
+`imagelib` decodes PNG by hand, which means it can be made to allocate by hand too. Measured
+against it before the limits went in:
+
+| file | on disk | what it did |
+|---|---|---|
+| a 20000×20000 PNG of zeroes | 1.1 MB | decoded to **1.2 GB** of pixels, without complaint |
+| a header claiming 60000×60000 | **68 bytes** | 16.7 s of CPU, then `IndexError: index out of range` |
+
+Both are a remote denial of service for anyone running `inpaint-server/`, which takes a PNG body
+from whoever can reach it. So the decoder now refuses a header over 100 megapixels — about eight
+times the largest photograph a current phone takes — and decompresses with a ceiling of exactly
+the byte count the header implies, so pixel data that expands past its own declared size is
+rejected rather than merely survived. Both files are now refused in 0.00 s.
+
+The MCP tools are more forgiving than the library: anything `imagelib` refuses is handed to
+`sips` or `ffmpeg`, which are separate processes with their own limits. A truncated PNG a strict
+decoder rejects may therefore still be read and used. That is deliberate, and it is why the
+limits are tested against `imagelib` directly — testing them through the tools would have proved
+nothing.
+
 ## Tests
 
 ```bash

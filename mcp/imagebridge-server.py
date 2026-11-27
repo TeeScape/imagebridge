@@ -38,7 +38,7 @@ if sys.version_info < (3, 8):
     raise SystemExit(1)
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.15.2"
+SERVER_VERSION = "0.16.0"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -479,7 +479,11 @@ def read_image(path):
                 continue
             out = os.path.join(tmp, "converted.png")
             try:
-                subprocess.run(build(path, out), check=True, timeout=120,
+                # An absolute path can never be mistaken for an option by a
+                # converter. sips on this machine handled a file named
+                # "-cover.jpg" correctly, so this is not a bug being fixed but
+                # a class being closed for the three converters I cannot test.
+                subprocess.run(build(os.path.abspath(path), out), check=True, timeout=120,
                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                 return imagelib.read_png(out)
             except Exception as exc:

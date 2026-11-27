@@ -426,6 +426,72 @@ r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":38,\"method\":\"tools/call\",\"para
 jhas "same-size pairs are not rescaled"          "$r" "'rescaled' not in d['result']['structuredContent']['comparison']"
 
 echo
+echo "malformed and hostile PNGs"
+python3 - "$ROOT" "$WORK" <<'MK'
+import sys, zlib, struct
+sys.path.insert(0, sys.argv[1] + "/mcp"); import imagelib as L
+W = sys.argv[2]
+def ch(t, d):
+    return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+def png(name, w, h, idat):
+    open(W + "/" + name, "wb").write(
+        L.MAGIC + ch(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+        + ch(b"IDAT", idat) + ch(b"IEND", b""))
+# Declares 60000x60000: 68 bytes that cost 16.7s of CPU before this was capped.
+png("liar.png", 60000, 60000, zlib.compress(b"\0" * 10))
+# Legal 100x100 header, half a gigabyte hidden in the IDAT.
+real = b"".join(bytes([0]) + bytes(100 * 3) for _ in range(100))
+png("sneaky.png", 100, 100, zlib.compress(real + bytes(200 * 1000 * 1000), 9))
+# Same header, truncated data.
+png("short.png", 100, 100, zlib.compress(real[:500]))
+png("zero.png", 0, 0, zlib.compress(b""))
+MK
+# The property is about imagelib, which is where the allocation would happen.
+# read_image deliberately falls back to sips/ffmpeg for anything it refuses,
+# and those are separate processes with their own limits, so at the tool level
+# a hostile file is often simply converted and read - safely. Testing the cap
+# through the tool would therefore have proved nothing.
+r=$(python3 - "$ROOT" "$WORK" <<'MK'
+import sys, time
+sys.path.insert(0, sys.argv[1] + "/mcp"); import imagelib as L
+for name in ("liar", "sneaky", "short", "zero"):
+    t = time.time()
+    try:
+        L.read_png(sys.argv[2] + "/" + name + ".png")
+        print(name, "READ")
+    except L.Unsupported as e:
+        print(name, "refused", "%.1f" % (time.time() - t), str(e)[:40])
+    except Exception as e:
+        print(name, type(e).__name__)
+MK
+)
+has "a lying header is refused"              "$r" "liar refused"
+has "a bomb in a legal header is refused"    "$r" "sneaky refused"
+has "truncated pixel data is refused"        "$r" "short refused"
+has "a zero-sized image is refused"          "$r" "zero refused"
+has "and none of them takes a second"        "$r" "0.0"
+# The megapixel ceiling only bites on a file whose IDAT really is gigabytes,
+# which is not a fixture to ship. Shrink the ceiling instead and check the
+# mechanism: sabotaging the real check otherwise turned nothing red, because
+# the hostile fixtures all tripped the length check first.
+r=$(python3 - "$ROOT" "$WORK" <<'MK'
+import sys
+sys.path.insert(0, sys.argv[1] + "/mcp"); import imagelib as L
+L.MAX_PIXELS = 100
+try:
+    L.read_png(sys.argv[2] + "/boxed.png")
+    print("READ a 4096-pixel image under a 100-pixel ceiling")
+except L.Unsupported as e:
+    print("ceiling holds:", str(e)[:60])
+MK
+)
+has "the megapixel ceiling is enforced"      "$r" "ceiling holds"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/liar.png\"}}}" | tail -1)
+jhas "the tool refuses the 3600-megapixel one" "$r" "d['result'].get('isError') is True"
+r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":63,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/boxed.png\"}}}" | tail -1)
+jhas "and an ordinary PNG still reads"        "$r" "d['result']['structuredContent']['width']==64"
+
+echo
 echo "install.sh (standalone install, into a throwaway HOME)"
 FAKE=$(mktemp -d "${TMPDIR:-/tmp}/ib-home.XXXXXX")
 # No claude on PATH: the script must still link everything and SAY that the

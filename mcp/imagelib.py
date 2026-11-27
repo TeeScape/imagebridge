@@ -20,6 +20,17 @@ import struct
 import zlib
 
 MAGIC = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+
+# A decoder that believes its input is a decoder that can be made to allocate
+# anything. Measured against this file before the limits went in: a 1.1 MB PNG
+# expanded to 1.2 GB of pixels without complaint, and a 68-byte one declaring
+# 60000x60000 spent 16.7 seconds of CPU before failing with "index out of
+# range". Both are a remote denial of service for anyone running
+# inpaint-server/, which takes a PNG body from whoever can reach it.
+#
+# 100 megapixels is about eight times the largest photograph a current phone
+# takes, so the limit is nowhere near honest work.
+MAX_PIXELS = 100 * 1000 * 1000
 CHANNELS = {0: 1, 2: 3, 4: 2, 6: 4}
 
 
@@ -87,6 +98,14 @@ def read_png_bytes(blob):
         data = blob[pos + 8:pos + 8 + length]
         if ctype == b"IHDR":
             width, height = struct.unpack(">II", data[:8])
+            if width < 1 or height < 1:
+                raise Unsupported("the header declares a %dx%d image" % (width, height))
+            if width * height > MAX_PIXELS:
+                raise Unsupported(
+                    "the header declares %dx%d = %.0f megapixels, over the %d-megapixel limit. "
+                    "Either this is not a photograph or the header is lying to make the decoder "
+                    "allocate."
+                    % (width, height, width * height / 1e6, MAX_PIXELS // 1000000))
             depth, colour, _, _, interlace = data[8], data[9], data[10], data[11], data[12]
             if depth not in (8, 16):
                 raise Unsupported("bit depth %d (only 8 and 16 are handled)" % depth)
@@ -103,7 +122,22 @@ def read_png_bytes(blob):
     if width is None or not idat:
         raise Unsupported("no image data")
     sample = depth // 8
-    px = _unfilter(zlib.decompress(bytes(idat)), width, height, channels, sample)
+    # The pixel data is exactly this long, and a PNG that disagrees is either
+    # corrupt or trying something. Decompressing with a ceiling means a bomb is
+    # refused rather than merely surviving the allocation.
+    expected = (width * channels * sample + 1) * height
+    stream = zlib.decompressobj()
+    try:
+        raw = stream.decompress(bytes(idat), expected)
+    except zlib.error as exc:
+        raise Unsupported("the pixel data will not decompress: %s" % exc)
+    if stream.unconsumed_tail or not stream.eof:
+        raise Unsupported("the pixel data expands past the %dx%d the header declares"
+                          % (width, height))
+    if len(raw) != expected:
+        raise Unsupported("the pixel data is %d bytes where %dx%d needs %d"
+                          % (len(raw), width, height, expected))
+    px = _unfilter(raw, width, height, channels, sample)
     if sample == 2:
         # Keep the high byte of each sample. Everything downstream - the
         # resampler, the mask, the comparison - is 8-bit, and a 16-bit source is
