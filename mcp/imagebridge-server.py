@@ -17,6 +17,7 @@ import base64
 import json
 import os
 import signal
+import ssl
 import struct
 import urllib.error
 import urllib.request
@@ -24,7 +25,7 @@ import subprocess
 import sys
 
 SERVER_NAME = "imagebridge"
-SERVER_VERSION = "0.9.0"
+SERVER_VERSION = "0.9.1"
 
 # Versions we can speak. The spec says: echo the client's version when we
 # support it, otherwise answer with the latest we do support.
@@ -55,11 +56,34 @@ def inpaint_url():
     env = os.environ.get("IMAGEBRIDGE_INPAINT_URL")
     if env:
         return env.strip()
+    return (_config().get("inpaint_url") or "").strip() or None
+
+
+def _config():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
-            return (json.load(fh).get("inpaint_url") or "").strip() or None
+            got = json.load(fh)
+            return got if isinstance(got, dict) else {}
     except Exception:
+        return {}
+
+
+def ssl_context():
+    """A context trusting a named CA bundle, when one is configured.
+
+    Some Python builds ship without a usable CA store, and a self-hosted
+    inpaint server may sit behind a private CA. Both are fixed by saying WHICH
+    roots to trust — never by turning verification off, which would make every
+    reply forgeable and is not an option this plugin offers at any setting.
+    """
+    bundle = (os.environ.get("IMAGEBRIDGE_CA_BUNDLE")
+              or _config().get("ca_bundle") or "").strip()
+    if not bundle:
         return None
+    bundle = os.path.expanduser(bundle)
+    if not os.path.isfile(bundle):
+        raise RuntimeError("ca_bundle does not exist: %s" % bundle)
+    return ssl.create_default_context(cafile=bundle)
 
 
 MIME_BY_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -641,7 +665,7 @@ def _post_png(url, payload, timeout):
         headers={"Content-Type": "image/png",
                  "User-Agent": "imagebridge/%s (object removal)" % SERVER_VERSION})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as resp:
             return resp.read()
     except urllib.error.HTTPError as exc:
         raise RuntimeError("the inpaint server answered %s %s" % (exc.code, exc.reason))
@@ -651,8 +675,8 @@ def _post_png(url, payload, timeout):
             hint = ("\nThis is a certificate store problem on this machine, not a problem with "
                     "the server: this Python cannot find a CA bundle. On macOS run the "
                     "'Install Certificates.command' that ships with Python, or point SSL_CERT_FILE "
-                    "at a bundle such as /etc/ssl/cert.pem. Do not work around it by disabling "
-                    "verification.")
+                    "at a bundle such as /etc/ssl/cert.pem, or set ca_bundle in %s to that path. "
+                    "Do not work around it by disabling verification." % CONFIG_PATH)
         raise RuntimeError("could not reach the inpaint server at %s: %s%s" % (url, exc, hint))
 
 

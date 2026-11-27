@@ -287,8 +287,17 @@ or, so it persists:
 
 ```json
 // ~/.imagebridge/config.json
-{ "inpaint_url": "https://inpaint.example.com/api/inpaint" }
+{
+  "inpaint_url": "https://inpaint.example.com/api/inpaint",
+  "ca_bundle": "/etc/ssl/cert.pem"
+}
 ```
+
+`ca_bundle` is optional and says **which** roots to trust — for a server behind a private CA, or
+for a Python built without a usable certificate store (`CERTIFICATE_VERIFY_FAILED` against a
+perfectly valid certificate). There is deliberately no setting that turns verification off: it
+would make every reply forgeable, and the fix for a trust problem is naming the trusted root, not
+abandoning the check. `IMAGEBRIDGE_CA_BUNDLE` overrides it.
 
 The contract is one POST, body `image/png`, response `image/png`: a 512×512 RGBA image in which
 **alpha 0 marks the hole**, answered with the filled RGB image. Any LaMa (Apache-2.0) or MI-GAN

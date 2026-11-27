@@ -474,6 +474,15 @@ print('both' if a==(9,99,199) and b==(9,99,199) else 'missed', 'between-kept' if
 has "both holes get filled"                "$r" "both"
 has "the gap between them is untouched"    "$r" "between-kept"
 
+r=$(IMAGEBRIDGE_CA_BUNDLE=/nonexistent/ca.pem rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\",\"regions\":[[10,10,20,20]]}}}" | tail -1)
+jhas "a missing ca_bundle is named"       "$r" "d['result'].get('isError') is True and 'ca_bundle does not exist' in d['result']['content'][0]['text']"
+
+cat > "$WORK/cfg.json" <<'CFG'
+["not", "an", "object"]
+CFG
+r=$(IMAGEBRIDGE_CONFIG="$WORK/cfg.json" rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":26,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\",\"regions\":[[10,10,20,20]]}}}" | tail -1)
+jhas "a config that is not an object is ignored" "$r" "d['result'].get('isError') is not True"
+
 unset IMAGEBRIDGE_INPAINT_URL
 r=$(IMAGEBRIDGE_CONFIG=/nonexistent rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.png\",\"regions\":[[1,1,4,4]]}}}" | tail -1)
 jhas "unconfigured says so, clearly"    "$r" "d['result'].get('isError') is True and 'no inpaint endpoint is configured' in d['result']['content'][0]['text']"
