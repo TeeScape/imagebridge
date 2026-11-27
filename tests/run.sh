@@ -575,14 +575,22 @@ print('filled' if inside==(9,99,199) else 'not-filled', 'kept' if outside!=(9,99
 has "the selected shape is filled"        "$r" "filled"
 has "the rest of the picture is kept"     "$r" "kept"
 
-# A JPEG, the format a photograph actually arrives in. Skipped where the
-# machine has no converter, because then there is nothing to test.
-if command -v sips >/dev/null 2>&1 || command -v ffmpeg >/dev/null 2>&1 || command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1; then
-  if command -v sips >/dev/null 2>&1; then
-    sips -s format jpeg "$WORK/scene.png" --out "$WORK/scene.jpg" >/dev/null 2>&1
-  else
-    ffmpeg -v error -y -i "$WORK/scene.png" "$WORK/scene.jpg" >/dev/null 2>&1
-  fi
+# A JPEG, the format a photograph actually arrives in. Make one with whatever
+# this machine has, and check the FILE rather than trusting the tool list: an
+# earlier version asked "is some converter installed?" and then only knew how
+# to drive two of the four, so a box with just ImageMagick said yes and
+# produced nothing.
+for t in sips ffmpeg magick convert; do
+  command -v "$t" >/dev/null 2>&1 || continue
+  case $t in
+    sips)    sips -s format jpeg "$WORK/scene.png" --out "$WORK/scene.jpg" >/dev/null 2>&1 ;;
+    ffmpeg)  ffmpeg -v error -y -i "$WORK/scene.png" "$WORK/scene.jpg" >/dev/null 2>&1 ;;
+    magick)  magick "$WORK/scene.png" "$WORK/scene.jpg" >/dev/null 2>&1 ;;
+    convert) convert "$WORK/scene.png" "$WORK/scene.jpg" >/dev/null 2>&1 ;;
+  esac
+  [ -s "$WORK/scene.jpg" ] && break
+done
+if [ -s "$WORK/scene.jpg" ]; then
   r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":27,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/scene.jpg\"}}}" | tail -1)
   jhas "a JPEG can be measured"           "$r" "d['result']['structuredContent']['width']==64"
   r=$(rpc "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":28,\"method\":\"tools/call\",\"params\":{\"name\":\"remove_object\",\"arguments\":{\"image\":\"$WORK/scene.jpg\",\"regions\":[[10,10,20,20]],\"output_path\":\"$WORK/jpg-out.png\"}}}" | tail -1)
@@ -591,9 +599,9 @@ if command -v sips >/dev/null 2>&1 || command -v ffmpeg >/dev/null 2>&1 || comma
   r=$(printf '%s\n%s\n' "$INIT" "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"tools/call\",\"params\":{\"name\":\"inspect_image\",\"arguments\":{\"image\":\"$WORK/scene.jpg\"}}}" | env PATH="$PYDIR" python3 "$ROOT/mcp/imagebridge-server.py" 2>/dev/null | tail -1)
   jhas "with no converter it says what to install" "$r" "d['result'].get('isError') is True and 'no image converter is installed' in d['result']['content'][0]['text']"
 else
-  ok "a JPEG can be measured (skipped: no converter here)"
-  ok "and an object removed from it (skipped: no converter here)"
-  ok "with no converter it says what to install (skipped: no converter here)"
+  ok "a JPEG can be measured (skipped: nothing here could make one)"
+  ok "and an object removed from it (skipped: nothing here could make one)"
+  ok "with no converter it says what to install (skipped: nothing here could make one)"
 fi
 
 # A 16-bit PNG hits the same decoder wall as a JPEG and takes the same route out.
